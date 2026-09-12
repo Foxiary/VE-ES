@@ -1,0 +1,27 @@
+# Nội dung game — KHÔNG commit.
+# Đây là asset của phần mềm thương mại; repo này chỉ chứa công cụ và tài liệu.
+*.cpk
+SaveUtil/
+Shader/
+copyright.png
+
+# Trung gian: work/stock là template .ffu bung ra từ CPK (asset game)
+work/
+
+# Sản phẩm build (mỗi bản ~460 MB)
+dist/
+out/
+
+# Font nguồn — tải lại từ Google Fonts, xem Font/README.md
+# Dùng Font/* chứ không phải Font/, nếu không git bỏ qua cả thư mục
+# và dòng phủ định bên dưới sẽ không có tác dụng.
+Font/*
+!Font/README.md
+
+# Ảnh chụp màn hình lấy từ Ryujinx
+shots/
+
+# Rác
+__pycache__/
+*.pyc
+*.bak

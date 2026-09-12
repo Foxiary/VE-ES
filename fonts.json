@@ -1,0 +1,42 @@
+{
+  "_comment": "Which source font renders which .ffu. Sizes are auto-fitted to each template's uppercase height, so no px values are needed here. Paths are relative to the repo root.",
+
+  "title_id": "01009cf01bac4000",
+  "cpk": "SYSTEM.cpk",
+  "mod_name": "vn-translation",
+
+  "fonts": {
+    "window/font/sysfont.ffu": {
+      "style": "mincho",
+      "note": "menus and key prompts; stroke ratio 1.67",
+      "source": "Font/Newsreader/static/Newsreader_24pt-Regular.ttf"
+    },
+    "window/font/advfont1.ffu": {
+      "style": "mincho, heavy",
+      "note": "in-game font option I; stroke ratio 2.43",
+      "source": "Font/Newsreader/static/Newsreader_36pt-Medium.ttf"
+    },
+    "window/font/advfont2.ffu": {
+      "style": "mincho, light",
+      "note": "in-game font option II; stroke ratio 2.00",
+      "source": "Font/Source_Serif_4/static/SourceSerif4_36pt-Regular.ttf"
+    },
+    "window/font/advfont3.ffu": {
+      "style": "gothic, heavy",
+      "note": "in-game font option III; stroke ratio 1.20",
+      "source": "Font/Cabin/static/Cabin-Medium.ttf"
+    },
+    "window/font/advfont4.ffu": {
+      "style": "gothic, light",
+      "note": "in-game font option IV; stroke ratio 1.17",
+      "source": "Font/Cabin/static/Cabin-Regular.ttf"
+    }
+  },
+
+  "text": [
+    "DATABASE/strSystem.gstr",
+    "DATABASE/strOption.gstr",
+    "DATABASE/strKeyHelp.gstr",
+    "DATABASE/dbDictionary.gbin"
+  ]
+}
