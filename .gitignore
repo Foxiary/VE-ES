@@ -4,6 +4,7 @@
 SaveUtil/
 Shader/
 copyright.png
+*.nsp
 
 # Trung gian: work/stock là template .ffu bung ra từ CPK (asset game)
 work/
