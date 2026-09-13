@@ -202,7 +202,11 @@ class Script:
                 payload = repl.get(item.data_off, item.raw)
                 if len(payload) % 4:
                     payload = payload + b'\x00' * (-len(payload) % 4)
-                blk_at[item.data_off] = cur + INS_HEADER + \
+                # Parameters point at the block HEADER, not at its payload.
+                # Keying this map by data_off instead silently leaves every
+                # parameter unpatched - and an identity round-trip will not
+                # catch it, because nothing moves in that case.
+                blk_at[item.hdr_off] = cur + INS_HEADER + \
                     len(ins.params) * PARAM_SIZE + len(body)
                 body += struct.pack('<4I', item.flag, len(payload) // 4, 1,
                                     len(payload)) + payload
@@ -237,6 +241,26 @@ class Script:
             if v >= self.code_end:
                 struct.pack_into('<I', out, hoff, v + shift)
         return bytes(out)
+
+    def check_pointers(self):
+        """Count parameters that should address a data block but do not.
+
+        A parameter either names one of its instruction's block headers, or is
+        an immediate / a GLOBAL_DATA address. One landing inside the code
+        section without hitting a block header means the rebuild mis-offset it.
+
+        This is the check an identity round-trip cannot make: when nothing
+        moves, stale pointers still happen to be correct.
+        """
+        bad = 0
+        for ins in self.instructions:
+            own = {b.hdr_off for b in ins.blocks}
+            for v, _t1, _t2 in ins.params:
+                if v in own or v >= 0xffffff00:
+                    continue
+                if self.code_start <= v < self.code_end:
+                    bad += 1            # points into code but not at a block
+        return bad
 
     def check(self):
         """Bytes skipped as padding must all be zero; the walk must land on the label."""
