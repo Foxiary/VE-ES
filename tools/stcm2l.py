@@ -57,7 +57,7 @@ BLOCK_HEADER = 16
 
 
 class Block:
-    __slots__ = ('hdr_off', 'data_off', 'flag', 'length', 'raw')
+    __slots__ = ('hdr_off', 'data_off', 'flag', 'length', 'raw', 'pad')
 
     def __init__(self, hdr_off, flag, length, raw):
         self.hdr_off = hdr_off
@@ -65,6 +65,7 @@ class Block:
         self.flag = flag
         self.length = length
         self.raw = raw
+        self.pad = b''                  # alignment bytes trailing the payload
 
     def text(self):
         """Payload decoded as UTF-8 up to the first NUL, or None if it is not text."""
@@ -78,15 +79,22 @@ class Block:
 
 
 class Instruction:
-    __slots__ = ('off', 'global_call', 'opcode', 'params', 'length', 'blocks')
+    __slots__ = ('off', 'global_call', 'opcode', 'params', 'length', 'blocks',
+                 'segments', 'tail')
 
-    def __init__(self, off, global_call, opcode, params, length, blocks):
+    def __init__(self, off, global_call, opcode, params, length, blocks,
+                 segments=None, tail=b''):
         self.off = off
         self.global_call = global_call
         self.opcode = opcode
         self.params = params            # [(value, tag1, tag2)]
         self.length = length
         self.blocks = blocks
+        # Layout of the data region, in order, so it can be rebuilt exactly:
+        # ('blk', Block) or ('pad', bytes). Without this the zero padding
+        # between blocks would be lost and the file would not round-trip.
+        self.segments = segments or []
+        self.tail = tail                # <16 bytes left over at the end
 
     def __repr__(self):
         return '<Ins @%#x op=%#x params=%d blocks=%d len=%#x>' % (
@@ -119,20 +127,27 @@ class Script:
                 raise ValueError('params overflow instruction at %#x' % p)
             params = [struct.unpack_from('<3I', d, p + INS_HEADER + i * PARAM_SIZE)
                       for i in range(npar)]
-            blocks, q, lim = [], p + INS_HEADER + npar * PARAM_SIZE, p + ln
+            blocks, segments = [], []
+            q, lim = p + INS_HEADER + npar * PARAM_SIZE, p + ln
             while q + BLOCK_HEADER <= lim:
                 flag, nwords, one, blen = struct.unpack_from('<4I', d, q)
                 if one == 1 and blen == nwords * 4 and blen > 0 \
                         and q + BLOCK_HEADER + blen <= lim:
-                    blocks.append(Block(q, flag, blen,
-                                        d[q + BLOCK_HEADER:q + BLOCK_HEADER + blen]))
-                    q += BLOCK_HEADER + ((blen + 3) & ~3)
+                    b = Block(q, flag, blen,
+                              d[q + BLOCK_HEADER:q + BLOCK_HEADER + blen])
+                    step = BLOCK_HEADER + ((blen + 3) & ~3)
+                    b.pad = d[q + BLOCK_HEADER + blen:q + step]
+                    blocks.append(b)
+                    segments.append(('blk', b))
+                    q += step
                 else:
                     self.padding += 4        # zero padding between blocks
+                    segments.append(('pad', d[q:q + 4]))
                     q += 4
-            self.tail += lim - q
+            tail = d[q:lim]
+            self.tail += len(tail)
             self.instructions.append(
-                Instruction(p, gcall, opcode, params, ln, blocks))
+                Instruction(p, gcall, opcode, params, ln, blocks, segments, tail))
             p += ln
         self.landed = (p == end)
 
@@ -148,6 +163,80 @@ class Script:
             t = b.text()
             if t:
                 yield b.data_off, t
+
+    # ----------------------------------------------------------------- write
+    def build(self, repl=None):
+        """Rebuild the file, optionally replacing block payloads.
+
+        repl: {block.data_off: bytes} keyed by the ORIGINAL data offset. The
+        replacement may be longer than the original; everything downstream is
+        re-offset.
+
+        Three kinds of number move when a payload grows, and all three are
+        rewritten here:
+          - each block's own `nwords` / `length`
+          - the owning instruction's `length`
+          - every parameter that points at one of its own data blocks
+
+        Two more live outside the code section and are patched at the end:
+          - the u32 slots in EXPORT_DATA that point at instruction starts
+          - the header offsets at 0x20 (EXPORT_DATA) and 0x2C (COLLECTION_LINK)
+
+        Parameters pointing into GLOBAL_DATA need no fixing: that section sits
+        before the code, so its offsets never shift. There are no jump pointers
+        between instructions - verified by classifying every parameter.
+        """
+        repl = repl or {}
+        d = self.raw
+
+        # pass 1: lay out instructions, recording where each one moves to
+        moved = {}                       # old instruction offset -> new
+        pieces, cur = [], self.code_start
+        for ins in self.instructions:
+            moved[ins.off] = cur
+            body, blk_at = bytearray(), {}
+            for kind, item in ins.segments:
+                if kind == 'pad':
+                    body += item
+                    continue
+                payload = repl.get(item.data_off, item.raw)
+                if len(payload) % 4:
+                    payload = payload + b'\x00' * (-len(payload) % 4)
+                blk_at[item.data_off] = cur + INS_HEADER + \
+                    len(ins.params) * PARAM_SIZE + len(body)
+                body += struct.pack('<4I', item.flag, len(payload) // 4, 1,
+                                    len(payload)) + payload
+            body += ins.tail
+            new_len = INS_HEADER + len(ins.params) * PARAM_SIZE + len(body)
+
+            params = bytearray()
+            for v, t1, t2 in ins.params:
+                params += struct.pack('<3I', blk_at.get(v, v), t1, t2)
+
+            pieces.append(struct.pack('<4I', ins.global_call, ins.opcode,
+                                      len(ins.params), new_len) + bytes(params) + bytes(body))
+            cur += new_len
+
+        out = bytearray(d[:self.code_start])
+        for piece in pieces:
+            out += piece
+        new_code_end = len(out)
+
+        # pass 2: the trailer, with its pointers into the code section rebased
+        trailer = bytearray(d[self.code_end:])
+        for o in range(0, len(trailer) - 4, 4):
+            v = struct.unpack_from('<I', trailer, o)[0]
+            if v in moved:
+                struct.pack_into('<I', trailer, o, moved[v])
+        out += trailer
+
+        # pass 3: header offsets that follow the trailer's new position
+        shift = new_code_end - self.code_end
+        for hoff in (0x20, 0x2C):
+            v = struct.unpack_from('<I', out, hoff)[0]
+            if v >= self.code_end:
+                struct.pack_into('<I', out, hoff, v + shift)
+        return bytes(out)
 
     def check(self):
         """Bytes skipped as padding must all be zero; the walk must land on the label."""
