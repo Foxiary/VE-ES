@@ -18,26 +18,40 @@ HOW ROWS ARE ADDRESSED
     JP file, then written at the same coordinate in the target file.
 
 ALIGNMENT
-    113 of 117 files have identical instruction counts, but four differ by 1-3
-    instructions, which would put a naive index mapping out of phase from that
-    point on. So the two streams are aligned with difflib on a per-instruction
-    signature (parameter count, block count, block sizes), and only the runs
-    difflib reports as EQUAL are used. Anything in an inserted or replaced run
-    is skipped rather than guessed at.
+    113 of 117 files have identical instruction counts and map one to one. Four
+    differ by 1-3 instructions, which would put a naive index mapping out of
+    phase from that point on, so those are aligned with difflib on a
+    per-instruction signature of (parameter count, block count) - block sizes
+    are excluded because they follow the text, which differs by language.
+    Only the runs difflib reports as EQUAL are used.
 
 SAFETY
-    A block is only overwritten when the target block also decodes as text.
-    Writing a translation over a numeric block would corrupt the script, so a
-    mismatch there is skipped and counted.
+    Two guards, both of which leave the original text in place rather than risk
+    corruption:
+      - a block is overwritten only when the target block also decodes as text,
+        so a translation never lands on a numeric block;
+      - lines longer than --max-bytes are skipped. No text block in the stock
+        build exceeds 84 bytes (median 14, p99 47); writing 98-byte blocks
+        crashed the main story, which points at a fixed line buffer.
 """
 import argparse
+import collections
 import difflib
+import re
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stcm2l import load as load_script           # noqa: E402
 from checksheet import load_sheet, rows_of       # noqa: E402
+
+
+MARKUP_RX = re.compile(r'#[A-Za-z][A-Za-z0-9]*')
+
+
+def count_markup(text):
+    """Multiset of inline engine commands in a line, e.g. {'#NAME': 1}."""
+    return collections.Counter(MARKUP_RX.findall(text))
 
 
 def signature(ins):
@@ -102,14 +116,14 @@ def locate(jp, ws):
     return found, stats
 
 
-def port_file(ws, jp_path, tgt_path):
+def port_file(ws, jp_path, tgt_path, max_bytes=0, fit_only=False):
     jp = load_script(jp_path)
     tgt = load_script(tgt_path)
     found, stats = locate(jp, ws)
     amap = align(jp, tgt)
 
     repl = {}
-    skipped_align = skipped_type = 0
+    skipped_align = skipped_type = skipped_long = skipped_markup = 0
     for (ins_i, blk_i), text in found.items():
         if ins_i not in amap:
             skipped_align += 1
@@ -122,10 +136,45 @@ def port_file(ws, jp_path, tgt_path):
         if not blk.text():                      # target block is not text
             skipped_type += 1
             continue
-        repl[blk.data_off] = text.encode('utf-8') + b'\x00'
+        # The markup must match the block being overwritten. Content matching
+        # can pick the neighbouring line when two are near-identical, which
+        # swaps a pair of adjacent lines. Harmless-looking, except that it can
+        # drop #NAME[1] into a block whose instruction has no name context -
+        # the engine then resolves a name from a garbage pointer and strcmp
+        # walks off the end of memory. That is the crash seen on 605.DAT.
+        if count_markup(text) != count_markup(blk.text() or ''):
+            skipped_markup += 1
+            continue
+        payload = text.encode('utf-8')
+        # DISPROVEN: an earlier version of this comment claimed the engine
+        # forbids changing a block's size. It does not - the Japanese build
+        # runs with re-offset blocks, and applyen.py rewrites 94,497 lines at
+        # full length on the English build. The crashes that produced that
+        # claim came from writing the RIGHT text at the WRONG place: content
+        # matching plus difflib alignment put lines one slot over, which is
+        # also what the markup guard above was added to catch.
+        #
+        # --fit-only is kept because it is still the safest way to patch a
+        # build whose row addressing is uncertain, not because sizes are fixed.
+        if fit_only:
+            cap = len(blk.raw)
+            if len(payload) + 1 > cap:
+                skipped_long += 1
+                continue
+            payload = payload + b'\x00' * (cap - len(payload) - 1)
+        # The engine appears to use a fixed line buffer: no text block in the
+        # stock build exceeds 84 bytes (median 14, p99 47), and writing 98-byte
+        # blocks crashed it on the main story. Anything longer is left in the
+        # original language rather than risking an overflow.
+        if max_bytes and len(payload) > max_bytes:
+            skipped_long += 1
+            continue
+        repl[blk.data_off] = payload + b'\x00'
     stats.update(applied=len(repl), skip_align=skipped_align,
-                 skip_type=skipped_type, aligned=len(amap),
-                 ins_jp=len(jp.instructions), ins_tgt=len(tgt.instructions))
+                 skip_type=skipped_type, skip_long=skipped_long,
+                 skip_markup=skipped_markup,
+                 aligned=len(amap), ins_jp=len(jp.instructions),
+                 ins_tgt=len(tgt.instructions))
     return tgt, repl, stats
 
 
@@ -137,6 +186,13 @@ def main():
     ap.add_argument('out_dir')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--sheet', action='append')
+    ap.add_argument('--fit-only', action='store_true',
+                    help='only write lines that fit the original block, padded '
+                         'with NUL so block sizes never change; a fallback for '
+                         'uncertain addressing, not an engine requirement')
+    ap.add_argument('--max-bytes', type=int, default=84,
+                    help='skip lines longer than this in UTF-8 bytes; the stock '
+                         'build never exceeds 84 (0 disables the cap)')
     a = ap.parse_args()
 
     wb = load_sheet(a.xlsx)
@@ -144,27 +200,29 @@ def main():
     if not a.dry_run:
         os.makedirs(a.out_dir, exist_ok=True)
 
-    tot = dict(rows=0, matched=0, applied=0, skip_align=0, skip_type=0)
-    print('%-7s %8s %8s %8s %7s %7s' %
-          ('sheet', 'rows', 'matched', 'applied', 'skipA', 'skipT'))
+    tot = dict(rows=0, matched=0, applied=0, skip_align=0, skip_type=0,
+               skip_long=0, skip_markup=0)
+    print('%-7s %8s %8s %8s %7s %7s %7s' %
+          ('sheet', 'rows', 'matched', 'applied', 'skipA', 'skipT', 'skipL'))
     for n in names:
         jp_p = os.path.join(a.jp_dir, '%s.DAT' % n)
         tg_p = os.path.join(a.target_dir, '%s.DAT' % n)
         if not (os.path.exists(jp_p) and os.path.exists(tg_p)):
             continue
-        tgt, repl, st = port_file(wb[n], jp_p, tg_p)
+        tgt, repl, st = port_file(wb[n], jp_p, tg_p, a.max_bytes, a.fit_only)
         for k in tot:
             tot[k] += st[k]
-        print('%-7s %8d %8d %8d %7d %7d' % (n, st['rows'], st['matched'],
-              st['applied'], st['skip_align'], st['skip_type']))
+        print('%-7s %8d %8d %8d %7d %7d %7d' % (n, st['rows'], st['matched'],
+              st['applied'], st['skip_align'], st['skip_type'], st['skip_long']))
         if not a.dry_run:
             with open(os.path.join(a.out_dir, '%s.DAT' % n), 'wb') as fh:
                 fh.write(tgt.build(repl))
     print('-' * 52)
-    print('rows %s | matched %s | applied %s | bo qua: lech dong %s, sai kieu %s'
+    print('rows %s | matched %s | applied %s | bo qua: lech dong %s, sai kieu %s, qua dai %s'
           % (format(tot['rows'], ','), format(tot['matched'], ','),
              format(tot['applied'], ','), format(tot['skip_align'], ','),
-             format(tot['skip_type'], ',')))
+             format(tot['skip_type'], ','), format(tot['skip_long'], ',')))
+    print('bo qua vi markup khong khop block goc: %s' % format(tot['skip_markup'], ','))
     return 0
 
 

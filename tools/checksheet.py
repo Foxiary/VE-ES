@@ -23,7 +23,7 @@ import os
 import re
 import sys
 
-ID_RX = re.compile(r'^([\d.]+)_+([0-9A-Fa-f]+)_(text|name)$')
+ID_RX = re.compile(r'^([\d.]+)_+([0-9A-Fa-f]+)_(text|name|choice|title|var|ui)$')
 
 
 def load_sheet(path):

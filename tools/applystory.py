@@ -26,6 +26,7 @@ original.
 """
 import argparse
 import csv
+import difflib
 import os
 import sys
 
@@ -44,7 +45,49 @@ def build_index(script):
     return idx
 
 
-def plan_sheet(ws, script):
+def fuzzy_pick(src, pool, used, cutoff, margin):
+    """Best near-match for `src` among unused pool entries, or None.
+
+    About 19% of sheet rows do not appear verbatim in the game: the source
+    column was edited by hand (spacing, punctuation, wording). Those rows are
+    unreachable by exact matching but usually still recognisable.
+
+    Two guards keep this from mis-assigning lines:
+      - the best score must reach `cutoff`;
+      - it must beat the runner-up by `margin`, so a row that resembles two
+        different lines equally is skipped rather than guessed at.
+
+    Candidates are pre-filtered by length and shared characters, because
+    scoring every line against every block is far too slow otherwise.
+    """
+    n = len(src)
+    lo, hi = int(n * 0.6), int(n * 1.6) + 2
+    sset = set(src)
+    best = second = 0.0
+    best_key = None
+    sm = difflib.SequenceMatcher()
+    sm.set_seq2(src)
+    for text, slots in pool.items():
+        if not (lo <= len(text) <= hi):
+            continue
+        if len(sset & set(text)) < len(sset) * 0.5:
+            continue
+        if all(s in used for s in slots):
+            continue
+        sm.set_seq1(text)
+        if sm.real_quick_ratio() < best or sm.quick_ratio() < best:
+            continue
+        r = sm.ratio()
+        if r > best:
+            best, second, best_key = r, best, text
+        elif r > second:
+            second = r
+    if best >= cutoff and (best - second) >= margin:
+        return best_key, best
+    return None, best
+
+
+def plan_sheet(ws, script, fuzzy=False, cutoff=0.86, margin=0.06):
     """Decide which block each translated row should overwrite.
 
     Returns (repl, stats, misses) where repl maps data_off -> bytes.
@@ -53,7 +96,7 @@ def plan_sheet(ws, script):
     used = set()
     repl = {}
     stats = dict(rows=0, translated=0, matched=0, ambiguous=0,
-                 missing=0, taken=0)
+                 missing=0, taken=0, fuzzy=0)
     misses = []
 
     for rid, hint, kind, src, tgt in rows_of(ws):
@@ -62,6 +105,11 @@ def plan_sheet(ws, script):
             continue
         stats['rows'] += 1
         cands = idx.get(src)
+        if not cands and fuzzy:
+            key, score = fuzzy_pick(src, idx, used, cutoff, margin)
+            if key is not None:
+                cands = idx[key]
+                stats['fuzzy'] += 1
         if not cands:
             stats['missing'] += 1
             if tgt:
@@ -91,6 +139,14 @@ def main():
     ap.add_argument('out_dir')
     ap.add_argument('--report', help='write unmatched rows to this CSV')
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--fuzzy', action='store_true',
+                    help='fall back to near-matching for rows whose source text '
+                         'was edited and no longer appears verbatim')
+    ap.add_argument('--cutoff', type=float, default=0.86,
+                    help='minimum similarity for a near-match (default 0.86)')
+    ap.add_argument('--margin', type=float, default=0.06,
+                    help='the best match must beat the runner-up by this much, '
+                         'otherwise the row is skipped (default 0.06)')
     ap.add_argument('--sheet', action='append', help='limit to these worksheets')
     a = ap.parse_args()
 
@@ -99,7 +155,8 @@ def main():
     if not a.dry_run:
         os.makedirs(a.out_dir, exist_ok=True)
 
-    tot = dict(rows=0, translated=0, matched=0, ambiguous=0, missing=0, taken=0)
+    tot = dict(rows=0, translated=0, matched=0, ambiguous=0, missing=0,
+               taken=0, fuzzy=0)
     all_miss = []
     print('%-7s %8s %8s %8s %8s %8s' %
           ('sheet', 'rows', 'matched', 'applied', 'ambig', 'missing'))
@@ -108,7 +165,7 @@ def main():
         if not os.path.exists(src):
             continue
         script = load_script(src)
-        repl, st, miss = plan_sheet(wb[n], script)
+        repl, st, miss = plan_sheet(wb[n], script, a.fuzzy, a.cutoff, a.margin)
         for k in tot:
             tot[k] += st[k]
         all_miss += [(n,) + m for m in miss]
@@ -121,6 +178,8 @@ def main():
                 fh.write(out)
 
     print('-' * 52)
+    if tot['fuzzy']:
+        print('khop gan dung: %s dong' % format(tot['fuzzy'], ','))
     print('rows %s | matched %s (%.1f%%) | applied %s | ambiguous %s | missing %s'
           % (format(tot['rows'], ','), format(tot['matched'], ','),
              tot['matched'] * 100 / tot['rows'] if tot['rows'] else 0,
