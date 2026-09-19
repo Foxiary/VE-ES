@@ -15,6 +15,7 @@ SYSTEM.cpk, GAME.cpk, …      romfs game đã bung (gitignored)
 Font/                        font nguồn tải từ Google Fonts (gitignored, xem Font/README.md)
 fonts.json                   font nào render file .ffu nào
 build.py                     một lệnh: bung → render → vá text → đóng gói → cài
+DICH.md                      quy trình đưa bản dịch vào game
 tools/                       thư viện + script, xem tools/README.md
 work/                        trung gian (gitignored): work/stock là template bung từ CPK
 dist/                        SYSTEM.cpk đã build (gitignored, ~460 MB)
@@ -68,8 +69,11 @@ từ template. Muốn đồng bộ cả kanji thì cần font CJK có tiếng Vi
 
 ## Trạng thái
 
-- Font: 5 file đã sinh từ Newsreader / Source Serif 4 / Cabin, khớp đúng kiểu
-  chữ gốc (advfont1/2 mincho, advfont3/4 gothic, sysfont mincho).
-- Text: mới vá thử vài màn để kiểm tra render — menu title, Glossary, thanh
-  phím, khung Sample trong Options. **Chưa đụng `STORY.cpk`** (thoại chính).
+- **Thoại đã vá xong**: 94.641/96.132 dòng trong `STORY.cpk`, chạy được trên
+  Ryujinx. Quy trình ở `DICH.md`.
+- Font: 5 file sinh từ Newsreader / Lora / Cabin. Chiều cao ô **phải bằng
+  template** — engine co glyph theo tỉ lệ `88/cell`, để ô phình ra cho vừa dấu
+  thanh là chữ nhỏ đi 19%.
+- Còn lại: 851 dòng lệch markup, 531 chưa dịch, 109 tên chương mất khoá, và
+  ~59 dòng rộng quá khung backlog cần rút gọn.
 - `tools/vnfont.py` là hướng cũ (ghép dấu từ glyph gốc), giữ lại làm đường lui.
