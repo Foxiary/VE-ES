@@ -47,6 +47,29 @@ Ghép **theo `EN ID`**, không dò nội dung. Cột `canh bao` đánh dấu dò
 | `cau Nhat lech` | câu Nhật nguồn không nằm ở vị trí đó bên bản Nhật |
 | `chua dich` | chưa có bản dịch |
 
+### 2b. Ghép tiêu đề chương
+
+```bash
+python tools/filltitles.py prefixes "<bang dich>" work/virche_vi.xlsx
+python tools/filltitles.py fill     "<bang dich>" work/virche_vi.xlsx        --prefixes work/title_prefixes.xlsx
+```
+
+Một tiêu đề chương nằm **hai nơi**: trong `.DAT` chạy cảnh và trong
+`dbFlowchart`. Bảng dịch từ ngoài gửi về chỉ có bản `dbFlowchart`, nên 448 tiêu
+đề bên kịch bản không có bản dịch — 340 ô trống và 108 ô điền `...` (mất khóa
+`<tiếng Nhật>@` nên `applyvi.py` từ chối).
+
+Không phải việc dịch mới: khớp theo khóa tiếng Nhật thì **thân tiêu đề đã dịch
+rồi**, chỉ khác một tiền tố chương. 41 tiền tố là toàn bộ phần còn thiếu, và
+`prefixes` gợi ý sẵn những cái suy được từ chính bảng dịch (`Act`→`Màn`,
+`Chapter`→`Chương`).
+
+**Chạy sau `--merge`, trước `applyvi`.** Tiêu đề ghép ra là dữ liệu dẫn xuất:
+merge lại là mất, chạy lại tool này là có.
+
+**Excel cắt dấu cách cuối ô.** Cả 41 tiền tố gửi đi là `Act 1: ` và nhận về là
+`Act 1:`. Tool lấy lại dấu cách từ bản gốc chứ không bắt ai giữ.
+
 ### 3. Ghi vào kịch bản
 
 ```bash

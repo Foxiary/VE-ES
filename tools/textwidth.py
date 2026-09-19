@@ -72,6 +72,20 @@ def display_lines(text):
     return t.split('#n')
 
 
+def shown(text, kind=None):
+    """The part of a row that actually reaches the screen.
+
+    A chapter title is stored as `<japanese key>@<display text>` and only the
+    half after the `@` is drawn - the key is what the flowchart looks the scene
+    up by. Measuring the whole cell made 26 composed titles look like they
+    overflowed the backlog box when not one of them does: the Japanese key was
+    being counted as if it were on screen.
+    """
+    if kind == 'title' and '@' in (text or ''):
+        return text.split('@', 1)[1]
+    return text or ''
+
+
 class Widths:
     """Line widths under each of the four selectable dialogue fonts."""
 

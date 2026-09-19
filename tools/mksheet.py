@@ -137,7 +137,7 @@ from stcm2l import Script                          # noqa: E402
 from gbnl import GBNL                              # noqa: E402
 from cpk import CPK                                # noqa: E402
 from portjp2us import align                        # noqa: E402
-from textwidth import Widths, CEILING              # noqa: E402
+from textwidth import Widths, CEILING, shown       # noqa: E402
 from linebreak import to_sheet, to_game            # noqa: E402
 
 # Opcode -> role, as laid out in the English build. Rebased per file; see above.
@@ -476,7 +476,8 @@ def load_fonts(path):
         return None
 
 
-def warnings_for(vi, en, jp_theirs, jp_mine, cap, widths=None, ceiling=CEILING):
+def warnings_for(vi, en, jp_theirs, jp_mine, cap, widths=None, ceiling=CEILING,
+                 kind=None):
     """[(code, text)] saying why this row needs a human look before it ships.
 
     `khong vua block` the line needs more bytes than the block it replaces, so
@@ -509,7 +510,7 @@ def warnings_for(vi, en, jp_theirs, jp_mine, cap, widths=None, ceiling=CEILING):
     # Width is what actually overflows the box; bytes only stand in for it when
     # no font is at hand, and they disagree in both directions.
     if widths is not None:
-        overshoot = widths.over(vi, ceiling)
+        overshoot = widths.over(shown(vi, kind), ceiling)
         if overshoot > 0:
             out.append(('qua rong', 'qua rong +%dpx' % overshoot))
     elif n > MAX_LINE_BYTES:
@@ -758,7 +759,7 @@ def main():
             jp_mine = jmap.get(coord)
             vi, jp_theirs = table.get(rid, ('', ''))
             flags = warnings_for(vi, src, jp_theirs, jp_mine, cap,
-                                 widths, ceiling) if merge else []
+                                 widths, ceiling, role) if merge else []
             for code, _text in flags:
                 warned[code] += 1
             out.append((rid, src, jp_mine, role, vi,

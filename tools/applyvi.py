@@ -90,7 +90,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stcm2l import Script                          # noqa: E402
 from cpk import CPK                                # noqa: E402
-from textwidth import Widths, CEILING              # noqa: E402
+from textwidth import Widths, CEILING, shown       # noqa: E402
 from linebreak import to_game                      # noqa: E402
 
 ID_RX = re.compile(r'^\d+___([0-9A-Fa-f]+)_(text|name|choice|title|var)$')
@@ -195,8 +195,9 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
         # across the four dialogue fonts. Both are 0 when no font was loaded.
         over_px = widest_px = 0
         if widths is not None:
-            over_px = widths.over(tgt, ceiling)
-            widest_px = max(widths.widest(tgt).values(), default=0)
+            drawn = shown(tgt, kind)
+            over_px = widths.over(drawn, ceiling)
+            widest_px = max(widths.widest(drawn).values(), default=0)
         if over_px > 0:
             st['rong hon khung backlog'] += 1
         if len(payload) > 84:
