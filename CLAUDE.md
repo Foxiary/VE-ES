@@ -315,13 +315,27 @@ after `f`, whose hook is drawn to overhang on purpose. Measure the ratio and the
 dimensions not being fitted - stem vertical/horizontal, x-height, the width of a
 reference string - before concluding a font matches.
 
-**Small cells lose the source font's side bearings to rounding.** At sysfont's
-cap height of 23 the bearings round to nothing: the stock font leaves 4.8 blank
-columns around the average Latin glyph and a rendered one keeps 0.8, so the text
-comes out 31% narrow while the ink is within 8% of stock. Eight source families
-all measured 22-34% too narrow, which looked like every one of them being
-condensed and was not. `ffugen --tracking N` adds the columns back; sysfont
-needs 6, and the 88px advfont cells need none.
+**A generated font is narrower than the stock one because the typeface is,
+not because anything was lost.** This was got wrong once and the wrong version
+was written down, so the measurement is here: summing advances over a sentence,
+a generated `.ffu` matches its own source font to **+0.0%** at sysfont's cap
+height of 23 and at advfont1's 54. Nothing rounds away.
+
+What the earlier note mistook for lost side bearings is a real gap - the stock
+sysfont leaves 4.8 blank columns around the average Latin glyph where Newsreader
+leaves none - but that is the two typefaces being drawn differently, and eight
+source families all measuring 22-34% narrower than stock is what a genuinely
+narrower design looks like, not eight coincidences.
+
+So `--tracking` and `--space-ratio` fix nothing and distort the typeface:
+`--space-ratio 0.58` on sysfont, meant to widen a word space that looked tight,
+made it **42% wider than the font designs it**. Both default to 0 and should
+stay there unless the goal is deliberately to depart from the source font.
+
+If the text still reads cramped after that, the causes that were real are
+elsewhere in this file: a cell taller than the template (the engine scales the
+glyph by `88/cell`), and an edge that has not been softened before the 4bpp
+quantise.
 
 **A chapter title is `<japanese key>@<display text>`.** The key is what the
 flowchart looks the scene up by; losing it corrupts the scene table rather than
