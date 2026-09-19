@@ -30,9 +30,9 @@ SAFETY
     corruption:
       - a block is overwritten only when the target block also decodes as text,
         so a translation never lands on a numeric block;
-      - lines longer than --max-bytes are skipped. No text block in the stock
-        build exceeds 84 bytes (median 14, p99 47); writing 98-byte blocks
-        crashed the main story, which points at a fixed line buffer.
+      - lines longer than --max-bytes are skipped. That cap is a stand-in for
+        the real constraint, which is rendered WIDTH, not bytes; `textwidth.py`
+        measures the width and CLAUDE.md records the box sizes.
 """
 import argparse
 import collections
@@ -146,26 +146,33 @@ def port_file(ws, jp_path, tgt_path, max_bytes=0, fit_only=False):
             skipped_markup += 1
             continue
         payload = text.encode('utf-8')
-        # DISPROVEN: an earlier version of this comment claimed the engine
-        # forbids changing a block's size. It does not - the Japanese build
-        # runs with re-offset blocks, and applyen.py rewrites 94,497 lines at
-        # full length on the English build. The crashes that produced that
-        # claim came from writing the RIGHT text at the WRONG place: content
-        # matching plus difflib alignment put lines one slot over, which is
-        # also what the markup guard above was added to catch.
+        # Changing a block's size is safe. The rule this flag was built for was
+        # real as an observation - same size ran, one byte either way did not -
+        # but the cause was not the size. `stcm2l.build()` copied three absolute
+        # addresses through without rebasing them: the call target in `opcode`
+        # when global_call is 1, the jump target in each parameter's second word
+        # for opcodes 3 and 6, and the file size at COLLECTION_LINK+4. All three
+        # are rebased now, and the English build runs with 94,641 lines written
+        # at full length.
         #
-        # --fit-only is kept because it is still the safest way to patch a
-        # build whose row addressing is uncertain, not because sizes are fixed.
+        # An intermediate explanation - that the crashes came from misalignment
+        # writing the right text in the wrong place - does not survive either:
+        # a build differing from stock by ONE line in the correct slot, eight
+        # bytes longer, still went to a black screen. Nothing was misaligned.
+        #
+        # --fit-only is kept because it is still the safest way to patch a build
+        # whose row addressing is uncertain, not because sizes are fixed.
         if fit_only:
             cap = len(blk.raw)
             if len(payload) + 1 > cap:
                 skipped_long += 1
                 continue
             payload = payload + b'\x00' * (cap - len(payload) - 1)
-        # The engine appears to use a fixed line buffer: no text block in the
-        # stock build exceeds 84 bytes (median 14, p99 47), and writing 98-byte
-        # blocks crashed it on the main story. Anything longer is left in the
-        # original language rather than risking an overflow.
+        # There is no byte limit: a probe build drew lines of 100 up to 800
+        # bytes and the game ran through all of them. 84 bytes is only where
+        # the stock text happens to stop. What a long line does is overflow the
+        # box on WIDTH - see `textwidth.py`, which measures that directly.
+        # --max-bytes is a blunt stand-in, kept for callers that have no font.
         if max_bytes and len(payload) > max_bytes:
             skipped_long += 1
             continue
