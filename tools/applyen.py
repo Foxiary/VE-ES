@@ -46,6 +46,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stcm2l import load as load_script           # noqa: E402
+from linebreak import to_game                    # noqa: E402
 
 EN_ID_RX = re.compile(r'^([\d.]+)_+([0-9A-Fa-f]+)_(text|name|var)$')
 MARKUP_RX = re.compile(r'#[A-Za-z][A-Za-z0-9]*')
@@ -68,8 +69,8 @@ def plan(ws, script, max_bytes=0, longrows=None):
         if not r or not r[0]:
             continue
         st['rows'] += 1
-        en = str(r[COL_EN]).strip() if len(r) > COL_EN and r[COL_EN] else ''
-        vi = str(r[COL_VI]).strip() if len(r) > COL_VI and r[COL_VI] else ''
+        en = to_game(str(r[COL_EN]).strip()) if len(r) > COL_EN and r[COL_EN] else ''
+        vi = to_game(str(r[COL_VI]).strip()) if len(r) > COL_VI and r[COL_VI] else ''
         eid = str(r[COL_EN_ID]).strip() if len(r) > COL_EN_ID and r[COL_EN_ID] else ''
         if not vi:
             st['no_translation'] += 1
