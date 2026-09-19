@@ -77,7 +77,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from exefs import nso_segments, SEGMENTS                # noqa: E402
-from applyvi import sheet_columns                       # noqa: E402
+from applyvi import sheet_columns, cell_str             # noqa: E402
+from linebreak import canon                             # noqa: E402
 
 # `main.rodata___2BD34_exe`. Deliberately unlike every other id in the project:
 # these rows address a segment offset, not a .DAT block or a .gbin cell, and no
@@ -134,8 +135,8 @@ def plan(ws, segs):
 
         # NOT passed through linebreak.to_game(): a break in the executable is a
         # real newline, and turning it into #n here would be the bug.
-        src = str(r[c_src]).strip() if c_src < len(r) and r[c_src] else ''
-        tgt = str(r[c_tgt]).strip() if c_tgt < len(r) and r[c_tgt] else ''
+        src = cell_str(r[c_src]).strip() if c_src < len(r) else ''
+        tgt = cell_str(r[c_tgt]).strip() if c_tgt < len(r) else ''
         tgt = tgt.replace('\r\n', '\n').replace('\r', '\n')
 
         if not tgt:
@@ -154,7 +155,7 @@ def plan(ws, segs):
         except UnicodeDecodeError:
             st['offset khong phai chuoi'] += 1
             continue
-        if cur != src:
+        if canon(cur) != canon(src):
             st['van ban khong khop'] += 1       # sheet built from another dump
             notes.append('%s: file giu %r' % (rid, cur[:48]))
             continue

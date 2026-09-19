@@ -9,6 +9,7 @@ Hai nhánh tách rời nhau, không phụ thuộc nhau:
 |---|---|---|---|
 | **Thoại** | 96.132 dòng trong 54 kịch bản | `STORY.cpk` | `applyvi.py` |
 | **Giao diện** | menu, Options, từ điển, tên chương | `SYSTEM.cpk` | `applyui.py` |
+| **File thực thi** | 12 câu trích ở màn tiêu đề | `exefs/main` | `applyexe.py` |
 
 ---
 
@@ -79,14 +80,81 @@ cp work/STORY_vi.cpk "$APPDATA/Ryujinx/mods/contents/01009cf01bac4000/vn-transla
 Font và text giao diện đi chung một file, nên bước đóng gói làm một lần.
 
 ```bash
-python tools/glossary.py --out work/glossary.xlsx     # rút riêng màn Glossary
-python tools/applyui.py work/glossary.xlsx work/out   # ghi vào .gbin/.gstr
-python build.py                                        # font + text -> dist/SYSTEM.cpk
+python build.py --sheet "Shuuen_JP_STORY.xlsx"        # font + text -> dist/SYSTEM.cpk
 cp dist/SYSTEM.cpk "$APPDATA/Ryujinx/mods/contents/01009cf01bac4000/vn-translation/romfs/SYSTEM.cpk"
 ```
 
+`--sheet` chạy `applyui.py` vào `work/out` rồi mới đóng gói. **Không bỏ cờ này
+rồi trông chờ chạy `applyui.py` trước** — trước đây `build.py` gọi
+`translate_glossary.py` ở bước đó, tức ghi đè bản dịch thật bằng mấy câu mẫu.
+Giờ không có `--sheet` thì nó giữ nguyên `.gbin`/`.gstr` đang có và báo ra.
+
+`build.py` truyền `cell` / `px` / `glow` / `mark_lift` trong `fonts.json` xuống
+`ffugen.py`. Thiếu bước đó thì font render ra khác hẳn file đang ghi cấu hình
+cho nó.
+
+**Kiểm font bằng ảnh đã thu nhỏ 0.588, đừng kiểm ở cỡ file.** Engine vẽ font
+ADV ở tỉ lệ đó, nên khe hở 1–2 hàng giữa dấu thanh và dấu mũ — thứ mọi font
+Latin đều để — biến mất và chữ `ố` trông như bị cắt cụt. Ở cỡ file thì hoàn
+toàn không thấy gì bất thường, và mọi phép kiểm cấu trúc đều sạch. `mark_lift`
+trong `fonts.json` là thứ bù lại; xem `CLAUDE.md`.
+
 Text giao diện đi qua `gbnl.py` nên **dài bao nhiêu cũng được** — nó dựng lại
 toàn bộ string pool và ánh xạ lại offset.
+
+---
+
+## Nhánh file thực thi — `exefs/main`
+
+Màn tiêu đề hiện một câu trích của ending vừa phá. **Không câu nào nằm trong
+romfs** — đã quét cả 22 database trong `SYSTEM.cpk`, 117 kịch bản trong
+`STORY.cpk`, `SaveUtil/`, `Shader/`; `GAME.cpk` thì chỉ có `.tid` và `.CL3`.
+Cả 12 câu là chuỗi C trong `.rodata` của `exefs/main`.
+
+```bash
+python tools/exefs.py extract  "...[USA][v0].nsp" work/exefs     # can prod.keys
+python tools/exefs.py segments work/exefs/main work/exefs
+python tools/exefs.py sheet    work/exefs/main.rodata.bin --grep "
+ 
+"
+python tools/applyexe.py work/title_quotes.xlsx work/exefs/main work/exefs-vi/main --install
+```
+
+Ba chỗ khác hẳn hai nhánh kia:
+
+- **Ngắt dòng là `
+` thật, không phải `#n`.** Đừng cho đi qua
+  `linebreak.to_game()`.
+- **Ship vào `exefs/`, không phải `romfs/`** — thư mục khác, độc lập với hai
+  nhánh trên. `--install` đặt đúng chỗ.
+- **Câu dài hơn bản gốc vẫn được.** Các câu này được trỏ tới qua một bảng con
+  trỏ 64-bit ở đầu `.rodata`, nên `applyexe.py` ghi câu dài ra vào 4.056 byte
+  đệm giữa `.rodata` và `.data` rồi chỉnh con trỏ. Hết chỗ thì từ chối, không
+  cắt câu.
+
+NSO được dựng lại **không nén** (xoá bit 0–2 của cờ ở `0x0C`), và hash SHA256
+của cả ba segment ở `0xA0`/`0xC0`/`0xE0` phải ghi lại — vá `.rodata` mà quên
+hash thì file trông ổn và bị loại lúc nạp.
+
+---
+
+## Bảng dịch từ ngoài gửi về thường bị bảng tính làm hỏng
+
+Bốn thứ đã gặp thật, tool nay tự chịu được, nhưng biết để khỏi mất thì giờ:
+
+| triệu chứng | nguyên nhân | chỗ xử lý |
+|---|---|---|
+| hàng loạt dòng `van ban khong khop` | mỗi `
+` bị thêm một dấu cách phía sau | `linebreak.canon()` |
+| `"1"` thành `"1.0"` | Excel lưu ô một chữ số thành **số** | `applyvi.cell_str()` |
+| `や　ゆ　よ` thành `や ゆ よ` | U+3000 bị đổi thành dấu cách thường | `linebreak.canon()` |
+| `markup lech` hàng loạt | người dịch ngắt dòng lại | chỉ kiểm lệnh **có tham số** |
+
+`canon()` **chỉ dùng để so sánh**. Chữ ghi vào game vẫn là chữ người dịch gõ.
+
+Với dòng giao diện, số lượng `#n` khác bản gốc là **hợp lệ** — text `.gbin` đi
+qua `gbnl.py` nên không có trần độ dài. Chỉ `#NAME[]`, `#Color[]`, `#PosX[]`
+mới bắt buộc giữ nguyên. Với dòng thoại thì không nới, vì đó là trần khác.
 
 ---
 

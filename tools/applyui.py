@@ -60,15 +60,34 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gbnl import GBNL                                # noqa: E402
 from cpk import CPK                                  # noqa: E402
-from linebreak import to_game                        # noqa: E402
-# Borrowed rather than copied: the header lookup and the markup tally have to
-# stay identical to the story path, or the two tools disagree about which column
-# a sheet keeps its translation in.
-from applyvi import sheet_columns, markup            # noqa: E402
+from linebreak import to_game, canon                 # noqa: E402
+# Borrowed rather than copied: the header lookup has to stay identical to the
+# story path, or the two tools disagree about which column a sheet keeps its
+# translation in.
+from applyvi import sheet_columns, cell_str         # noqa: E402
 
 # Only the roles a database column can carry. A story row pasted into one of
 # these sheets names an offset into a .DAT and is refused rather than applied.
 ID_RX = re.compile(r'^(\d+)\.(\d+)___([0-9A-Fa-f]+)_(ui|name|title)$')
+
+# Commands that carry an argument, and so mean something specific. These must
+# survive a translation exactly: `#NAME[1]` is the name the player chose,
+# `#Color[8]`/`#Color[0]` open and close a coloured run, and the ten `#PosX[%d]`
+# of IDS_DICTIONARY_TAB are the Glossary's tab stops.
+COMMAND_RX = re.compile(r'#(?:NAME|Color|PosX)\[[^\]]*\]')
+
+# `#n` is deliberately NOT in there. It is a line break, and a translator
+# re-breaking a paragraph to fit Vietnamese is doing their job, not losing a
+# command: a database string goes back through `gbnl.build()`, which rebuilds
+# the pool, so neither its length nor its line count is constrained. Requiring
+# the counts to match refused 78 finished rows on this project's first real
+# sheet. The delta is counted and reported instead.
+BREAK = '#n'
+
+
+def commands(text):
+    return collections.Counter(COMMAND_RX.findall(text or ''))
+
 
 SUFFIXES = ('.gbin', '.gstr')
 
@@ -109,8 +128,8 @@ def plan(ws, g):
         rel, role = int(m.group(3), 16), m.group(4)
         # Stripped first, then converted - a trailing newline is invisible in
         # Excel and would otherwise come back as a trailing #n.
-        src = to_game(str(r[c_src]).strip()) if c_src < len(r) and r[c_src] else ''
-        tgt = to_game(str(r[c_tgt]).strip()) if c_tgt < len(r) and r[c_tgt] else ''
+        src = to_game(cell_str(r[c_src]).strip()) if c_src < len(r) else ''
+        tgt = to_game(cell_str(r[c_tgt]).strip()) if c_tgt < len(r) else ''
 
         if not tgt:
             st['chua dich'] += 1
@@ -120,13 +139,19 @@ def plan(ws, g):
             notes.append('%s: o (%d, %d) khong con giu offset %#x'
                          % (rid, record, col, rel))
             continue
-        if g.text(rel) != src:
+        # canon(): the sheet's source column may carry padding around its
+        # breaks from whatever edited it. The id already names the exact cell;
+        # this only has to confirm the sheet belongs to this build.
+        if canon(g.text(rel)) != canon(src):
             st['van ban khong khop'] += 1        # sheet built from another dump
             continue
-        if markup(tgt) != markup(src):
-            st['markup lech'] += 1
-            notes.append('%s: %r -> %r' % (rid, src[:40], tgt[:40]))
+        if commands(tgt) != commands(src):
+            st['mat lenh'] += 1
+            notes.append('%s: lenh %s -> %s'
+                         % (rid, dict(commands(src)), dict(commands(tgt))))
             continue
+        if tgt.count(BREAK) != src.count(BREAK):
+            st['ngat dong lai'] += 1            # allowed; counted so it is visible
         # A flowchart title is "<japanese key>@<display text>" and the key is
         # what the scene table is looked up by. Losing it corrupts the lookup
         # rather than just the text, so the row is refused, never repaired.
@@ -135,15 +160,23 @@ def plan(ws, g):
             st['title mat khoa'] += 1
             notes.append('%s: mat khoa %r' % (rid, src.split('@', 1)[0]))
             continue
-        if tgt == src:
+        # KEY ON THE POOL'S OWN TEXT, NOT ON THE SHEET'S SOURCE COLUMN.
+        # `gbnl.build()` looks each pool string up in this dict verbatim, so a
+        # key that differs from it by even one space replaces nothing - and the
+        # row still counts as applied, which is the worst kind of wrong. The
+        # comparison above is deliberately tolerant of editor damage; the key
+        # cannot be. This shipped once with every multi-line glossary entry
+        # silently left in English while the single-line names translated fine.
+        key = g.text(rel)
+        if tgt == key:
             st['giong ban goc'] += 1
             continue
-        if src in repl and repl[src] != tgt:
+        if key in repl and repl[key] != tgt:
             # build() is keyed by text: whichever won would decide the other.
             st['trung nguon khac ban dich'] += 1
-            notes.append('%s: %r co hai ban dich khac nhau' % (rid, src[:40]))
+            notes.append('%s: %r co hai ban dich khac nhau' % (rid, key[:40]))
             continue
-        repl[src] = tgt
+        repl[key] = tgt
         st['applied'] += 1
 
     return repl, st, notes
@@ -246,8 +279,11 @@ def main():
     print('ap dung %s dong tren %d file%s'
           % (format(tot['applied'], ','), len(written),
              ' (dry-run, khong ghi gi)' if a.dry_run else ''))
-    for k in ('chua dich', 'giong ban goc', 'van ban khong khop', 'markup lech',
-              'title mat khoa', 'trung nguon khac ban dich',
+    if tot['ngat dong lai']:
+        print('  (%d dong da ap dung nhung nguoi dich ngat dong khac ban goc)'
+              % tot['ngat dong lai'])
+    for k in ('chua dich', 'giong ban goc', 'mat lenh',
+              'van ban khong khop', 'title mat khoa', 'trung nguon khac ban dich',
               'id khong tro vao o chuoi', 'id khong doc duoc', 'file hong'):
         if tot[k]:
             print('  bo qua - %-26s %s' % (k, format(tot[k], ',')))

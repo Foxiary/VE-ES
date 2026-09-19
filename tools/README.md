@@ -25,6 +25,14 @@ kanji giữ hình gốc của game.
 Tham số hay dùng: `--pad` (đệm trên/dưới, tăng nếu dấu sát mép), `--match-char`
 (ký tự dùng để dò cỡ, mặc định `A`), `--no-vn` (không thêm charset tiếng Việt).
 
+`--mark-lift N` nâng dấu thanh của chữ có **hai dấu chồng nhau** lên `N` hàng.
+Engine vẽ font ADV ở tỉ lệ 0.588, mà các font Latin chỉ chừa 0–2 hàng trống
+giữa dấu thanh và dấu mũ, nên trên màn hình hai dấu dính thành một khối và
+trông như bị cắt. Chỉ tác động lên chữ mà dạng NFD có ≥2 combining mark —
+đúng tập `ấ ế ồ ắ …`, không đụng `à á è` của Latin-1. Có kẹp theo từng glyph
+để không đẩy mực ra ngoài ô; 3 là mức lớn nhất mà chưa chữ thường nào bị kẹp.
+Chi tiết ở `../CLAUDE.md`.
+
 ### `cpk.py` — bung / đóng gói `.cpk`
 
 ```bash

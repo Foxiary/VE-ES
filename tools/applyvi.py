@@ -105,6 +105,20 @@ def markup(text):
     return collections.Counter(MARKUP_RX.findall(text or ''))
 
 
+def cell_str(v):
+    """A cell as the text it was meant to be.
+
+    Excel stores a cell holding `1` as a number, and openpyxl hands it back as
+    the float 1.0 - so a save-slot label that reads "1" in the sheet arrives as
+    "1.0" and matches nothing. Nine rows of strSystem were refused for that
+    reason on the first real translation sheet. An integral float is written
+    back as an integer; everything else is left alone.
+    """
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return '' if v is None else str(v)
+
+
 def sheet_columns(header):
     """Locate the id / source / target columns, by header then by position."""
     low = [str(c).strip().lower() if c else '' for c in header]

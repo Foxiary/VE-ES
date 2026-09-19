@@ -721,7 +721,9 @@ def main():
                     help='a translation sheet carrying this tool\'s EN ID column; '
                          'its Vietnamese is filled in and flagged for review')
     ap.add_argument('--sheet', action='append',
-                    help='limit to these script files (repeatable)')
+                    help='limit to these worksheets, script or database '
+                         '(repeatable). It used to filter the scripts only, so '
+                         'asking for one database still wrote all nine.')
     a = ap.parse_args()
 
     jp_story = {} if a.no_jp else read_map(a.jp_story, ('.DAT',))
@@ -806,6 +808,8 @@ def main():
         print()
         print('%-24s %8s  %s' % ('database', 'strings', 'ghep voi ban Nhat'))
         for base, data in read_sources(a.system, ('.gbin', '.gstr')):
+            if a.sheet and sheet_name(base) not in a.sheet:
+                continue
             cols = DB_COLUMNS.get(base)
             if not cols:
                 skipped.append('%s: khong co cot can dich' % base)

@@ -61,6 +61,27 @@ def extract_stock(cfg):
             print('        %s' % os.path.basename(full))
 
 
+# Per-font render settings in fonts.json, and the ffugen.py flag each one
+# feeds. Anything absent from a font's entry is left at ffugen's own default.
+#
+# These have to be forwarded or the build silently disagrees with the file that
+# records them: `cell` pins the glyph cell to the template height (letting it
+# grow to fit tone marks makes the engine scale everything down), `px` is the
+# largest size at which every Vietnamese character still fits that cell, and
+# `glow` softens the coverage before it is quantised to 4bpp. Left unpassed,
+# ffugen auto-fits the size, leaves the cell alone and renders hard edges.
+FONT_FLAGS = {
+    'cell': '--cell',
+    'px': '--px',
+    'glow': '--glow',
+    'pad': '--pad',
+    'tracking': '--tracking',
+    'mark_lift': '--mark-lift',
+    'match_char': '--match-char',
+    'space_ratio': '--space-ratio',
+}
+
+
 def build_fonts(cfg):
     os.makedirs(OUT, exist_ok=True)
     for path, spec in cfg['fonts'].items():
@@ -69,10 +90,14 @@ def build_fonts(cfg):
         src = os.path.join(ROOT, spec['source'])
         if not os.path.exists(src):
             sys.exit('missing font %s - see Font/README.md' % spec['source'])
-        print('font  : %-14s <- %s' % (name, os.path.basename(src)))
+        tuned = [(FONT_FLAGS[k], str(spec[k])) for k in FONT_FLAGS if k in spec]
+        print('font  : %-14s <- %-34s %s'
+              % (name, os.path.basename(src),
+                 ' '.join('%s %s' % f for f in tuned)))
         r = subprocess.run(
             [sys.executable, os.path.join(TOOLS, 'ffugen.py'),
-             '--template', tpl, '--out', os.path.join(OUT, name), '--font', src],
+             '--template', tpl, '--out', os.path.join(OUT, name), '--font', src]
+            + [x for f in tuned for x in f],
             capture_output=True, text=True, encoding='utf-8', errors='replace')
         if r.returncode:
             sys.exit(r.stdout + r.stderr)
@@ -81,15 +106,27 @@ def build_fonts(cfg):
                 print('        %s' % line.strip())
 
 
-def build_text():
-    print('text  : applying translations')
+def build_text(sheet):
+    """Write the interface translation into OUT, ready for the repack.
+
+    This used to run `translate_glossary.py`, which writes a handful of sample
+    strings and was the only thing there was before a real sheet existed. That
+    is now actively dangerous: it rewrites dbDictionary.gbin and strOption.gstr
+    in OUT, so running the build after `applyui.py` replaced 790 translated rows
+    with a dozen samples. So the sample is no longer wired in - pass the sheet.
+    """
+    if not sheet:
+        print('text  : khong co --sheet, giu nguyen .gbin/.gstr dang co trong work/out')
+        print('        (chay tools/applyui.py truoc, hoac dua --sheet vao day)')
+        return
+    print('text  : %s' % sheet)
     r = subprocess.run(
-        [sys.executable, os.path.join(TOOLS, 'translate_glossary.py'), STOCK, OUT],
+        [sys.executable, os.path.join(TOOLS, 'applyui.py'), sheet, OUT],
         capture_output=True, text=True, encoding='utf-8', errors='replace')
     if r.returncode:
         sys.exit(r.stdout + r.stderr)
     for line in r.stdout.splitlines():
-        if ': replaced' in line:
+        if line.startswith(('ap dung', '  bo qua', '  (')) or '->' in line:
             print('        %s' % line.strip())
 
 
@@ -127,6 +164,10 @@ def main():
                     help='copy the result into the Ryujinx mods folder')
     ap.add_argument('--fonts-only', action='store_true',
                     help='rebuild the fonts but skip the text step')
+    ap.add_argument('--sheet',
+                    help='translation workbook whose interface rows go into the '
+                         'build; without it the .gbin/.gstr already in work/out '
+                         'are kept as they are')
     ap.add_argument('--clean', action='store_true',
                     help='discard the extracted stock files and re-extract')
     a = ap.parse_args()
@@ -138,7 +179,7 @@ def main():
     extract_stock(cfg)
     build_fonts(cfg)
     if not a.fonts_only:
-        build_text()
+        build_text(a.sheet)
     built = repack(cfg)
     if a.install:
         install(cfg, built)

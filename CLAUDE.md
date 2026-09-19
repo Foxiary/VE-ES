@@ -92,6 +92,77 @@ Only 44 of the 146 Vietnamese accented characters ship in the stock fonts (the
 Latin-1 ones). advfont additionally has 12 **blank** entries — `Ăă Ĩĩ Ơơ Ũũ Ưư Đđ`
 exist in the range table but hold no pixels.
 
+### What the English build's Latin actually is
+
+Comparing the USA files against the JP ones settles which glyphs are Japanese
+and which the localiser drew:
+
+| | kanji / kana | Latin | cap, EN → JP |
+|---|---|---|---|
+| sysfont | identical | **identical** | 23 → 23 |
+| advfont1–4 | identical | **all 62 differ** | 54→60, 52→62, 52→62, 54→59 |
+
+So Aksys kept every Japanese glyph and re-rendered only the Latin of the four
+ADV fonts, at a smaller cap than the JP build. sysfont they left alone: its
+Latin is the Japanese mincho's own.
+
+Matching those four against 489 local faces and 1 067 Google Fonts families
+(weight swept) identifies them:
+
+| `.ffu` | typeface | fingerprint error | gap to runner-up |
+|---|---|---|---|
+| advfont1 | Jomolhari | 0.034 | 2.7× |
+| advfont2 | **Source Serif 4 Regular** | 0.025 | 4.6× |
+| advfont3 | **Open Sans SemiBold** | 0.023 | 3.9× |
+| advfont4 | Sawarabi Gothic | 0.044 | 2.9× |
+
+Rebuilding a whole line from Source Serif 4 the way the EN generator lays glyphs
+out reproduces the stock bitmap, down to the gap after `f` in "Drifter".
+
+**Only advfont2 and advfont3 are usable as-is.** Jomolhari carries 48 of the 146
+Vietnamese characters and Sawarabi Gothic 120, so advfont1 and advfont4 need a
+stand-in — Tinos sits in the same Times-derived cluster as Jomolhari, and Open
+Sans Regular keeps advfont3/4 a matched weight pair the way the stock files are.
+
+Two caveats on the two identified by name. Jomolhari's runners-up are all
+minority-script faces — Scheherazade New, Nuosu SIL, Tai Heritage Pro, Microsoft
+Himalaya — which bundle the same Times-derived Latin, so what is established is
+that the outlines match, not that Aksys licensed that font rather than a shared
+ancestor. The same applies to Sawarabi Gothic.
+
+**Advances carry no typeface information here.** In advfont1–4 `adv - ink` is 2
+or 3 px for every one of the 62 Latin glyphs and `lsb` is 0 or 1: the EN
+generator threw the typeface's side bearings away and packed each glyph to its
+own ink box. Fingerprinting on advances therefore bottoms out around 5% error
+and names the wrong faces. Fingerprint on the **ink box** — width, height and
+height above baseline per glyph, normalised by cap height. sysfont is the
+exception that proves it: `adv - ink` runs 4–8 there, because that file still
+has its original bearings.
+
+### The engine draws the ADV font at 0.588
+
+Measured off a screenshot: the word `chống` is 182 px wide in `advfont1.ffu` and
+107 px on screen at 1080p. The Glossary and the Options sample box both use it.
+
+This is what decides Vietnamese legibility, and it is not a font problem.
+Vietnamese stacks a tone mark over a circumflex or breve, and at these cap
+heights the Latin faces leave **0 to 2 blank rows** between the two — 0 for Lora
+and Cabin, 1 for Newsreader, Source Serif and Open Sans, 2 for Tinos. Scaled by
+0.588 that is under a pixel, so the pair renders as one blunt mark and reads as
+a clipped acute. Nothing is clipped: every Vietnamese glyph in a generated
+`.ffu` matches its source outline row for row, which is worth re-checking before
+believing otherwise.
+
+`ffugen --mark-lift N` is the fix: it raises the topmost ink band of any letter
+whose NFD form carries **two** combining marks, which is exactly the Vietnamese
+stack and leaves the Latin-1 set alone. The cell has ~16 rows of headroom above
+the tallest stacked lowercase letter. At `--mark-lift 3` the blank averages 3.1
+to 3.5 rows, about 2 px on screen. Going higher starts clamping: capitals like
+`Ế Ổ Ẫ` already sit near the top of the cell, and the lift is capped per glyph
+so nothing is pushed out of it. Letters where the tone mark is the only mark on
+top — `ớ ờ ứ ừ` and friends, horn at the side — are skipped, having nothing to
+be confused with.
+
 ## Data files: `.gbin` (GBNL) and `.gstr` (GSTL)
 
 `tools/gbnl.py`. Same shape, different magic placement: GSTL puts the header at
@@ -293,6 +364,16 @@ the real cause in one pass was a build differing from stock by eight bytes and
 one line: the diff was small enough to read in full, and the 26 words that
 should have moved and had not were all in the same field.
 
+**A text-keyed replacement must be keyed on the file's own string.**
+`gbnl.build()` looks each pool string up in the replacement dict verbatim, so a
+key taken from a sheet's source column instead of from `g.text(rel)` matches
+nothing when the two differ by so much as a space - and the row still counts as
+applied. That shipped once: every multi-line glossary description stayed English
+while the single-line names translated fine, and the build's own `verify()`
+agreed with itself because it used the same wrong key. Compare tolerantly
+(`linebreak.canon()`), but key exactly. Address-keyed writes - `applyvi.py` and
+`applyexe.py`, which patch a byte offset - cannot hit this.
+
 **A spreadsheet holds real newlines; the game holds `#n`.** Every sheet is
 written with `linebreak.to_sheet()` and must be read back through
 `linebreak.to_game()` — `mksheet`, `glossary`, `checksheet`, `applyvi`,
@@ -368,6 +449,21 @@ That is how the schema bug was found, and it holds for all 22 files in `DATABASE
 **Guessing which cells are strings hits false positives.** Scanning for values
 that happen to point at a string start also matches numeric columns and corrupts
 them. Read the schema instead.
+
+**PIL's `getbbox` on text is the layout box, not the ink box.** Its right edge
+is the advance, so measuring glyph widths with it silently mixes the bearings
+into every number. That is what broke the first font matcher: it ranked Arial
+Narrow Italic first for an upright face and put the real Times second behind a
+Tibetan font. Measure ink from an actual render and threshold it.
+
+**A font matcher needs a positive control before its output means anything.**
+Feed it a face you already know — render Corbel, Constantia and Calibri at the
+target cap height and ask it to find them. With the layout-box bug all three
+failed; once ink was measured properly each came back first at an error of
+0.029-0.032 with the next candidate three to four times away. That number is
+what makes a result readable: a real match lands near 0.03 with about 1% width
+deviation, and anything at 0.10 or above is not a match, however tidy its
+ranking looks.
 
 **Rendered glyphs must match the template's cap height.** Kanji are kept from
 the template, so Latin rendered even slightly larger or smaller reads as two

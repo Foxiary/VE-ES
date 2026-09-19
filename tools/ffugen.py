@@ -110,13 +110,54 @@ def measure(chain, chars):
     return lo, hi
 
 
-def render(chain, ch, H, y_off, tracking=0, glow=0.0):
+def _lift_tone_mark(im, pad, H, lift):
+    """Raise the tone mark of a doubly-accented letter by `lift` rows.
+
+    Vietnamese stacks a tone mark on top of a circumflex or breve, and these
+    Latin faces set the two almost touching: measured on the shipped files the
+    blank between them is 0 rows (Lora, Cabin), 1 row (Newsreader, Source Serif,
+    Open Sans) or 2 (Tinos). The engine then draws the ADV font at 0.588, so
+    even 2 rows lands under a pixel and the pair reads on screen as one blunt
+    mark - which is what looks like a clipped acute. Nothing is actually cut:
+    every glyph matches its source outline row for row.
+
+    The cell has ~16 rows of headroom above the tallest stacked letter, so the
+    fix is to move the mark up rather than to change typeface. Only the topmost
+    ink band moves, and only when a blank row already separates it from the rest
+    of the glyph, so a mark that is drawn joined to its base is left alone.
+    """
+    a = list(im.getdata())
+    rows_ink = [any(a[y * pad + x] for x in range(pad)) for y in range(H)]
+    if not any(rows_ink):
+        return im
+    top = rows_ink.index(True)
+    y = top
+    while y < H and rows_ink[y]:
+        y += 1
+    if y >= H or not any(rows_ink[y:]):
+        return im                       # single band: nothing stacked to move
+    n = min(lift, top)                  # never push ink out of the cell
+    if n <= 0:
+        return im
+    band = a[top * pad: y * pad]
+    for i in range(top * pad, y * pad):
+        a[i] = 0
+    off = (top - n) * pad
+    for i, v in enumerate(band):
+        if v:
+            a[off + i] = max(a[off + i], v)
+    im.putdata(a)
+    return im
+
+
+def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0):
     """Return (advance, width, rows), or None. rows = list[list[0..15]].
 
     The glyph is spaced by its own typeface, plus `tracking` columns. See the
     two comments below for what that is and for two spacing rules tried here
     that were wrong.
     """
+    import unicodedata
     from PIL import Image, ImageDraw
     s = chain.pick(ch)
     if s is None:
@@ -128,6 +169,11 @@ def render(chain, ch, H, y_off, tracking=0, glow=0.0):
     pad = max(8, guess + 16)
     im = Image.new('L', (pad, H), 0)
     ImageDraw.Draw(im).text((0, y_off), ch, font=s.font, fill=255)
+    # Two combining marks in NFD is exactly the Vietnamese stack - tone over
+    # circumflex, breve or horn. One mark (the Latin-1 set) is left alone.
+    if mark_lift and sum(1 for c in unicodedata.normalize('NFD', ch)
+                         if unicodedata.combining(c)) >= 2:
+        im = _lift_tone_mark(im, pad, H, mark_lift)
     if glow:
         # The stock glyphs are SOFT, and a straight render is not. Down the
         # middle of advfont1's 'o' the game goes 2 4 4 4 4 6 a d f f f, four to
@@ -240,7 +286,7 @@ def pack(rows):
 
 
 def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
-          tracking=0, space_ratio=0.0, glow=0.0):
+          tracking=0, space_ratio=0.0, glow=0.0, mark_lift=0):
     """Build a new .ffu from rendered and template bitmaps."""
     base_old = baseline_of(tpl)
     shift = base_new - base_old          # shift old glyphs to the new baseline
@@ -262,7 +308,7 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
     entries, order = [], sorted(chars, key=FFU.u8i)
     n_new = n_kept = n_skip = 0
     for ch in order:
-        r = render(chain, ch, H, y_off, tracking, glow)
+        r = render(chain, ch, H, y_off, tracking, glow, mark_lift)
         if r is not None:
             adv, w, rows = r
             entries.append((ch, adv, H, pack(rows)))
@@ -358,6 +404,10 @@ def main():
                     help='blur the glyph coverage before quantising, to get the '
                          'soft edge ramp the stock fonts have; without it a 4bpp '
                          'render stair-steps. About 1.0 matches advfont1')
+    ap.add_argument('--mark-lift', type=int, default=0,
+                    help='raise the tone mark of doubly-accented Vietnamese '
+                         'letters by this many rows, so the pair survives the '
+                         'engine scaling the ADV font down to 0.588')
     ap.add_argument('--tracking', type=int, default=0,
                     help='extra columns added to every advance; small cells lose '
                          'the source font side bearings to rounding, so the stock '
@@ -431,7 +481,7 @@ def main():
 
     data = build(tpl, chain, H, y_off, base_new, add_vn=not a.no_vn,
                  tracking=a.tracking, space_ratio=a.space_ratio,
-                 glow=a.glow)
+                 glow=a.glow, mark_lift=a.mark_lift)
     with open(a.out, 'wb') as fh:
         fh.write(data)
     print('-> %s (%s byte)' % (a.out, format(len(data), ',')))

@@ -36,8 +36,35 @@ SPACING AROUND A BREAK IS LEFT ALONE
     is what stops a stray trailing newline - invisible in Excel - from arriving
     as a trailing `#n`; converting first and stripping after would leave it in.
 """
+import re
 
 MARK = '#n'
+
+# Whitespace hugging a line break. Used only for COMPARING a sheet's source
+# column against the game, never for what gets written back.
+_AROUND_BREAK = re.compile('[ \t　]*(?:\n|#n)[ \t　]*')
+# Any other run of spacing. An editor that rewrites an ideographic space as an
+# ordinary one turned `や　ゆ　よ` into `や ゆ よ` and lost two more rows.
+_RUN = re.compile('[ \t　]+')
+
+
+def canon(s):
+    """Fold the spaces around every break, for an is-this-the-same-string test.
+
+    A sheet that has been round-tripped through another editor comes back with
+    its breaks padded - one workbook arrived with a space inserted after every
+    single `\n`, which made 149 rows fail an exact-match check against text they
+    plainly were. Folding both sides before comparing accepts that and still
+    refuses a string that is actually different.
+
+    Both spellings of a break fold to the same thing, because a caller may reach
+    here on either side of `to_game()` and would otherwise be comparing `#n`
+    against a newline and finding them different.
+
+    This is for comparison only. The text written back into the game is what the
+    translator typed, not this.
+    """
+    return _RUN.sub(' ', _AROUND_BREAK.sub('\n', s or ''))
 
 
 def to_sheet(s):

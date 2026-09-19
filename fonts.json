@@ -14,35 +14,39 @@
     },
     "window/font/advfont1.ffu": {
       "style": "mincho, heavy",
-      "note": "in-game font option I; px 70 = co lon nhat ma moi ky tu Viet con lot o 88",
-      "source": "Font/Newsreader/static/Newsreader_36pt-Medium.ttf",
+      "note": "in-game font option I; ban EN dung Jomolhari (chi co 48/146 ky tu Viet) nen thay bang Tinos, cung cum Times; px 75 = co lon nhat ma moi ky tu Viet con lot o 88; glow 0.4 + mark_lift 3 - engine ve font ADV o 0.588 nen khe ho 1-2 hang giua dau thanh va dau mu khong song sot, phai nang dau len",
+      "source": "Font/Tinos/Tinos-Regular.ttf",
       "cell": 88,
-      "px": 70,
-      "glow": 0.8
+      "px": 75,
+      "glow": 0.4,
+      "mark_lift": 3
     },
     "window/font/advfont2.ffu": {
       "style": "mincho, light",
-      "note": "in-game font option II; px 62 = co lon nhat ma moi ky tu Viet con lot o 88",
-      "source": "Font/Lora/static/Lora-Regular.ttf",
+      "note": "in-game font option II; DUNG FONT GOC cua ban EN (sai so van tay 0.0247); px 67 = co lon nhat ma moi ky tu Viet con lot o 88; glow 0.4 + mark_lift 3 - engine ve font ADV o 0.588 nen khe ho 1-2 hang giua dau thanh va dau mu khong song sot, phai nang dau len",
+      "source": "Font/Source_Serif_4/SourceSerif4-VariableFont_opsz,wght.ttf",
       "cell": 88,
-      "px": 62,
-      "glow": 0.8
+      "px": 67,
+      "glow": 0.4,
+      "mark_lift": 3
     },
     "window/font/advfont3.ffu": {
       "style": "gothic, heavy",
-      "note": "in-game font option III; px 65 = co lon nhat ma moi ky tu Viet con lot o 88",
-      "source": "Font/Cabin/static/Cabin-Medium.ttf",
+      "note": "in-game font option III; DUNG FONT GOC cua ban EN (sai so van tay 0.0239); px 65 = co lon nhat ma moi ky tu Viet con lot o 88; glow 0.4 + mark_lift 3 - engine ve font ADV o 0.588 nen khe ho 1-2 hang giua dau thanh va dau mu khong song sot, phai nang dau len",
+      "source": "Font/Open_Sans/OpenSans-SemiBold.ttf",
       "cell": 88,
       "px": 65,
-      "glow": 0.8
+      "glow": 0.4,
+      "mark_lift": 3
     },
     "window/font/advfont4.ffu": {
       "style": "gothic, light",
-      "note": "in-game font option IV; px 65 = co lon nhat ma moi ky tu Viet con lot o 88",
-      "source": "Font/Cabin/static/Cabin-Regular.ttf",
+      "note": "in-game font option IV; ban EN dung Sawarabi Gothic (chi co 120/146 ky tu Viet) nen thay bang Open Sans Regular, cung ho voi advfont3; px 65 = co lon nhat ma moi ky tu Viet con lot o 88; glow 0.4 + mark_lift 3 - engine ve font ADV o 0.588 nen khe ho 1-2 hang giua dau thanh va dau mu khong song sot, phai nang dau len",
+      "source": "Font/Open_Sans/OpenSans-Regular.ttf",
       "cell": 88,
       "px": 65,
-      "glow": 0.8
+      "glow": 0.4,
+      "mark_lift": 3
     }
   },
   "text": [
