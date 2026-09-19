@@ -110,20 +110,62 @@ def measure(chain, chars):
     return lo, hi
 
 
-def render(chain, ch, H, y_off):
-    """Return (advance, width, rows), or None. rows = list[list[0..15]]."""
+def render(chain, ch, H, y_off, tracking=0):
+    """Return (advance, width, rows), or None. rows = list[list[0..15]].
+
+    The glyph is spaced by its own typeface, plus `tracking` columns. See the
+    two comments below for what that is and for two spacing rules tried here
+    that were wrong.
+    """
     from PIL import Image, ImageDraw
     s = chain.pick(ch)
     if s is None:
         return None
-    adv = int(round(s.font.getlength(ch)))
     bb = s.font.getbbox(ch)
-    ink_r = max(bb[2], adv) if bb else adv
-    w = max(8, ((ink_r + 7) // 8) * 8)
-    im = Image.new('L', (w, H), 0)
+    # Draw into a scratch wide enough for the ink wherever the typeface puts it,
+    # then find where the ink really is; the source metrics are only a hint.
+    guess = max(int(round(s.font.getlength(ch))), bb[2] if bb else 0)
+    pad = max(8, guess + 16)
+    im = Image.new('L', (pad, H), 0)
     ImageDraw.Draw(im).text((0, y_off), ch, font=s.font, fill=255)
     px = list(im.getdata())
-    rows = [[(px[y * w + x] + 8) // 17 for x in range(w)] for y in range(H)]
+    cols = [x for x in range(pad)
+            if any(px[y * pad + x] for y in range(H))]
+
+    if not cols:                     # space, or a glyph that draws nothing
+        adv = max(1, int(round(s.font.getlength(ch))) + tracking)
+        w = max(8, ((adv + 7) // 8) * 8)
+        return adv, w, [[0] * w for _ in range(H)]
+
+    # Space the glyph exactly as its typeface says, overhang included.
+    #
+    # Two earlier rules here were both wrong, for the same reason. Measuring the
+    # stock font showed its ink never runs past its own advance, and that looked
+    # like a rule to enforce - first by re-spacing every glyph off its ink, then
+    # by widening the advance only where the ink overflowed. Both break letters
+    # whose overhang is deliberate: an `f` hook is drawn to reach over the next
+    # letter, so forcing the advance to clear it opens a hole and "Drifter"
+    # renders as "Drif ter". The heavier the weight, the bigger the hook and the
+    # wider the hole.
+    #
+    # Nothing clips a glyph to its advance - text overflows the message box
+    # freely - so an overhang costs nothing. The stock font simply has no
+    # overhangs; that is a property of that typeface, not a constraint of the
+    # format. The bitmap is still sized to hold the ink.
+    # `tracking` widens every advance by a fixed number of columns. It defaults
+    # to 0 and should normally stay there: at 0 the generated .ffu reproduces
+    # the source font's own spacing to within rounding - measured at +0% on
+    # sysfont and -1.4% on the larger cells, the latter being the per-glyph
+    # round to whole pixels. An earlier note here claimed small cells lose their
+    # side bearings to rounding and need tracking to put them back; that was
+    # wrong. A generated font looks narrower than the stock one because these
+    # Latin typefaces ARE narrower than the game's mincho at the same cap
+    # height, which tracking cannot fix without distorting the typeface.
+    hi = cols[-1]
+    adv = max(1, int(round(s.font.getlength(ch))) + tracking)
+    w = max(8, ((max(adv, hi + 1) + 7) // 8) * 8)
+    rows = [[(px[y * pad + x] + 8) // 17 if x <= hi else 0
+             for x in range(w)] for y in range(H)]
     return adv, w, rows
 
 
@@ -185,7 +227,8 @@ def pack(rows):
     return bytes(out)
 
 
-def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True):
+def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
+          tracking=0, space_ratio=0.0):
     """Build a new .ffu from rendered and template bitmaps."""
     base_old = baseline_of(tpl)
     shift = base_new - base_old          # shift old glyphs to the new baseline
@@ -207,7 +250,7 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True):
     entries, order = [], sorted(chars, key=FFU.u8i)
     n_new = n_kept = n_skip = 0
     for ch in order:
-        r = render(chain, ch, H, y_off)
+        r = render(chain, ch, H, y_off, tracking)
         if r is not None:
             adv, w, rows = r
             entries.append((ch, adv, H, pack(rows)))
@@ -227,6 +270,20 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True):
                 box[ty] = row[:]
         entries.append((ch, g['adv'], H, pack(box)))
         n_kept += 1
+
+    # The word space is the one glyph worth overriding. It is faithful to the
+    # source font at 0, but these Latin faces set it at 0.31-0.44 of the 'n'
+    # advance while every stock game font sits at 0.56-0.59, and at that width
+    # words run together on screen. Letter spacing is left exactly as designed.
+    if space_ratio:
+        adv_n = next((a for c, a, _h, _d in entries if c == 'n'), None)
+        if adv_n:
+            want = max(1, int(round(adv_n * space_ratio)))
+            for k, (c, a, hh, d) in enumerate(entries):
+                if c == ' ':
+                    entries[k] = (c, want, hh, d)
+                    if verbose:
+                        print('  dau cach: %d -> %d (%.2f x chu n)' % (a, want, space_ratio))
 
     if verbose:
         print('  rendered: %d | kept from template: %d | skipped: %d'
@@ -276,6 +333,19 @@ def main():
     ap.add_argument('--match-char', default='A',
                     help='character used to match the template size (default A)')
     ap.add_argument('--pad', type=int, default=2, help='extra padding above and below')
+    ap.add_argument('--cell', type=int, default=0,
+                    help='force the glyph cell height instead of fitting it to the '
+                         'tallest glyph; the template value keeps the text at the '
+                         "stock scale, at the cost of clipping whatever does not fit")
+    ap.add_argument('--space-ratio', type=float, default=0.0,
+                    help="word space as a fraction of the 'n' advance; 0 keeps "
+                         "the source font's own. The stock fonts sit at 0.56-0.59 "
+                         "while these Latin faces give 0.31-0.44, which is what "
+                         "glues words together on screen")
+    ap.add_argument('--tracking', type=int, default=0,
+                    help='extra columns added to every advance; small cells lose '
+                         'the source font side bearings to rounding, so the stock '
+                         'sysfont spacing needs about 5 put back')
     ap.add_argument('--no-vn', action='store_true',
                     help='do not add the Vietnamese charset')
     a = ap.parse_args()
@@ -315,13 +385,22 @@ def main():
     lo, hi = measure(chain, chars)
     H = (hi - lo) + 2 * a.pad
     y_off = a.pad - lo                    # PIL draw origin (y=0 is the ascender line)
+    if a.cell:
+        # Pin the baseline to where the template puts it and cut the cell to the
+        # requested height. Letters keep their position and only what sticks out
+        # above the cell - the stacked Vietnamese tone marks - is lost. Without
+        # re-anchoring, forcing the height alone drops the whole glyph to the
+        # bottom of the cell and shears 11 px off every descender.
+        H = a.cell
+        y_off = baseline_of(tpl) - chain.sources[0].font.getmetrics()[0]
     base_new = y_off + chain.sources[0].font.getmetrics()[0]
     print('o glyph  : cao %d px (ink %d..%d), baseline %d'
           % (H, lo, hi, base_new))
     if H > 255:
         raise SystemExit('cell height %d > 255, lower --px' % H)
 
-    data = build(tpl, chain, H, y_off, base_new, add_vn=not a.no_vn)
+    data = build(tpl, chain, H, y_off, base_new, add_vn=not a.no_vn,
+                 tracking=a.tracking, space_ratio=a.space_ratio)
     with open(a.out, 'wb') as fh:
         fh.write(data)
     print('-> %s (%s byte)' % (a.out, format(len(data), ',')))
