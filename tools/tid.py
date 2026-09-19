@@ -61,12 +61,16 @@ from cpk import CPK                                  # noqa: E402
 
 HEADER = 128
 
-# fourcc -> (Pillow bcn index, bytes per pixel)
+# fourcc -> (Pillow bcn index, bytes per pixel). A fourcc of four NUL bytes is
+# not a block format at all: those textures are stored as raw 32-bit pixels,
+# which is why `bcn` is None for that entry.
+RAW = b'\x00\x00\x00\x00'
 FORMATS = {
     b'DXT1': (1, 0.5),
     b'DXT3': (2, 1.0),
     b'DXT5': (3, 1.0),
     b'BC7 ': (7, 1.0),
+    RAW: (None, 4.0),
 }
 
 
@@ -98,6 +102,9 @@ class TID:
         if self.fourcc not in FORMATS:
             raise ValueError('unknown format %r' % self.fourcc)
         n = FORMATS[self.fourcc][0]
+        if n is None:
+            return Image.frombytes('RGBA', (self.width, self.height),
+                                   self.body(), 'raw', 'BGRA')
         return Image.frombytes('RGBA', (self.width, self.height),
                                self.body(), 'bcn', (n,))
 

@@ -151,6 +151,100 @@ graph and jump graph identical, verified in game. The older note in
 `portjp2us.py` that a size change crashes was describing these stale pointers,
 not a rule of the format.
 
+## Textures: `.tid`
+
+`tools/tid.py`. GAME.cpk holds nothing else worth reading - 714 `.tid` textures
+and 777 `.CL3` sprite archives, no text files at all.
+
+```
+0x00  'TID' + format byte       0x04  u32 total size
+0x08  u32 data offset (0x80)    0x14  u32 -> name
+0x20  file name, NUL-padded
+0x40  u32 -> fourcc block       0x44  u32 WIDTH     0x48  u32 HEIGHT
+0x58  u32 payload size          0x5C  u32 data offset again
+0x64  FOURCC                    0x80  pixel data
+```
+
+FOURCC is `DXT1` (0.5 bytes/px), `DXT5` or `BC7 ` (1.0), or **four NUL bytes**,
+which is not a block format at all but raw 32-bit **BGRA**. The format byte at
+0x03 agrees - 0x90 for DXT1, 0x80 for the rest - but the fourcc is the
+unambiguous one. `width * height * bytes-per-pixel` equals the payload exactly,
+and `tid.py list` prints that comparison per file so a misread header shows up
+as a mismatch instead of a wrong picture.
+
+**The payload is linear, not swizzled.** Switch textures are normally stored
+block-linear and have to be untiled first. These are not, so Pillow's own `bcn`
+decoder reads them directly and `tid.py` is only a header parser. That was
+checked, not assumed: the first blocks of `title_bg1.tid` hold coherent
+neighbouring colours rather than the scattered ones tiling would give, and the
+decode was then confirmed against a screenshot.
+
+**A lot of interface text is painted into these, not drawn from a string.** The
+title screen's whole menu - Start, Load, Flowchart, Scene List, Special, Options
+- is one 2048x1024 BC7 atlas at three states per item, together with the logo,
+"Press Any Button" and the copyright line. The Glossary screen's own title, its
+`Notes` label and the `-NEW-` badge are in `dictionary_parts.tid`; character
+names are painted into `chsel_face*.tid`. None of it is reachable through
+`mksheet.py`, and translating it means redrawing art.
+
+**Writing them back is not solved.** Pillow decodes BCn and does not encode it,
+so a redrawn atlas needs a compressor this repo does not have.
+
+## Text that is not in romfs: `exefs/main`
+
+`tools/exefs.py`. The title screen shows a quote from the ending you last
+cleared, and all **twelve** of them are C strings in the `.rodata` of
+`exefs/main` - not in any CPK. That was established by elimination: every one of
+the 22 databases in SYSTEM.cpk, all 117 scripts in STORY.cpk, `SaveUtil/` and
+`Shader/` were searched decompressed, and GAME.cpk holds only `.tid` and `.CL3`.
+
+They are spelled unlike every other string in the game - the break is a real
+`
+`, not `#n`, and paragraphs are separated by `
+ 
+`, which is what finds
+them. 124 to 252 bytes each; `work/title_quotes.xlsx` carries them with that
+budget. There is no Japanese column: the JP build keeps none of these in its
+executable, in `main` or in `subsdk0`, so the quotes look like something the
+localisation added.
+
+```bash
+python tools/exefs.py extract  "...[USA][v0].nsp" work/exefs   # needs prod.keys
+python tools/exefs.py segments work/exefs/main work/exefs      # LZ4 segments
+python tools/exefs.py strings  work/exefs/main.rodata.bin --grep "
+ 
+"
+python tools/exefs.py sheet    work/exefs/main.rodata.bin --grep "
+ 
+"
+```
+
+The sheet's id is shaped `main.rodata___2BD34_exe` **so that nothing applies
+it by accident**: it fails the regex in `checksheet.py`, `applyvi.py` and
+`applyui.py` alike, because these rows address neither a `.DAT` block nor a
+`.gbin` cell. The break in them is a real newline and must stay one -
+`linebreak.to_game()` would turn it into `#n`, which is wrong here.
+
+**Patching this ships somewhere else.** A CPK mod cannot reach an executable;
+Ryujinx loads one from `mods/contents/<title id>/<name>/exefs/`, independent of
+the `romfs/` that `build.py --install` writes. `tools/applyexe.py` does the
+write.
+
+**A longer translation is moved, not refused.** `.rodata` is packed with no
+slack, but the quotes are reached through a **64-bit pointer table** at the
+start of the segment - not through an ADRP/ADD pair in `.text`, which was
+searched for and does not exist. So a string that outgrows its span is written
+into the 4,056 bytes of page padding between `.rodata` and `.data` and its
+pointer re-aimed; all twelve at +25% need about 2,857 of those bytes. In-place
+is still preferred when the translation fits.
+
+**The NSO is rebuilt uncompressed**, clearing bits 0-2 of the flags at 0x0C
+rather than carrying an LZ4 compressor - 1.8 MB becomes 2.9 MB. Bits 3-5 say all
+three segments are SHA256-checked, with the digests at 0xA0/0xC0/0xE0 taken over
+the *decompressed* bytes, so those have to be rewritten too. That this is what
+the fields mean was confirmed before anything was written: hashing the three
+decompressed segments of the shipped `main` reproduces all three stored digests.
+
 ## Text limits: width, not bytes
 
 **There is no byte limit.** A probe build put lines of 100, 150, 200, 300, 500
@@ -279,6 +373,8 @@ See `tools/README.md`. The short version:
 - `ffugen.py` — **the main tool**: render a `.ffu` from OTF/TTF
 - `vnfont.py` — older approach, composes diacritics from the stock glyphs
 - `cpk.py` — list / unpack / repack `.cpk`
+- `tid.py` — read `.tid` textures out of GAME.cpk as PNG
+- `exefs.py` — read the executable: NSP → ExeFS → NSO segments → strings
 - `gbnl.py` — read/rebuild `.gbin` and `.gstr` (offsets remapped, text may grow)
 - `patchstr.py` — in-place `.gstr` edits (length-capped)
 - `translate_glossary.py` — the sample translations used to check rendering
@@ -295,6 +391,7 @@ The text pipeline, in the order it runs:
 - `reflow.py` — re-break a message box's lines to fit, without losing text
 - `applyvi.py` — write the workbook back into the scripts, addressed by id
 - `applyui.py` — the same for the `ui` rows, rebuilding the SYSTEM databases
+- `applyexe.py` — and for the `exe` rows, rebuilding `exefs/main`
 - `checksheet.py` / `applystory.py` / `portjp2us.py` — the older sheet-driven
   path, kept for sheets with no `EN ID` column
 

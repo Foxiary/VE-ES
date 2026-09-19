@@ -254,6 +254,86 @@ Sau khi sửa thì block dài ra **thật sự an toàn về mặt cấu trúc**
 MB, đồ thị gọi y nguyên, mọi kiểm tra sạch. Trần 84 byte ở trên là chuyện khác —
 đó là bộ đệm dòng của engine, vẫn chưa chứng minh.
 
+### `exefs.py` — đọc chữ nằm ngoài romfs
+
+```bash
+python tools/exefs.py extract  "...[USA][v0].nsp" work/exefs   # can prod.keys
+python tools/exefs.py segments work/exefs/main work/exefs
+python tools/exefs.py strings  work/exefs/main.rodata.bin --grep "
+ 
+"
+python tools/exefs.py sheet    work/exefs/main.rodata.bin --grep "
+ 
+"
+```
+
+`sheet` dung `Workbook` của `mksheet.py` nên cột giống mọi sheet khác,
+nhưng ID cố tình đặt dạng `main.rodata___2BD34_exe` để **không tool nào
+lỡ áp vào**: nó trượt regex của `checksheet.py`, `applyvi.py` lẫn
+`applyui.py`. Mấy dòng này không trỏ tới block `.DAT` hay ô `.gbin` nào.
+
+Ngắt dòng ở đây là **xuống hàng thật và phải giữ nguyên** —
+`linebreak.to_game()` sẽ biến nó thành `#n`, sai cho chỗ này.
+
+Không có cột tiếng Nhật: bản JP không giữ câu nào trong file thực thi
+(đã kiểm cả `main` lẫn `subsdk0` của hai bản), nên mấy câu này có vẻ là
+thứ bên bản địa phương hóa thêm vào.
+
+Màn tiêu đề hiện một câu trích của ending vừa phá, và cả **12 câu** nằm
+trong `.rodata` của `exefs/main`, không ở CPK nào. Kết luận này là do
+**loại trừ**: đã quét 22 database trong SYSTEM.cpk, 117 script trong
+STORY.cpk, `SaveUtil/`, `Shader/` — tất cả đã giải nén; GAME.cpk thì chỉ
+có `.tid` và `.CL3`.
+
+Chúng viết khác mọi chuỗi còn lại: ngắt dòng là `
+` thật chứ không
+phải `#n`, và giữa hai đoạn là `
+ 
+` — đó là dấu hiệu để tìm ra.
+124–252 byte mỗi câu, đã xuất ra `work/title_quotes.csv`.
+
+Đi qua `nsz` (đã cài sẵn, có bộ đọc NCA), khóa lấy từ
+`~/.switch/prod.keys`. `main` là NSO, ba segment nén LZ4 block — bộ giải
+nén viết tay ~30 dòng, rẻ hơn thêm một dependency, và có đối chiếu
+kích thước với header.
+
+**Vá chỗ này là việc khác.** Mod CPK không với tới file thực thi;
+Ryujinx nạp nó từ `mods/contents/<title id>/<tên>/exefs/`. Và `.rodata`
+xếp khít không có chỗ trống, nên câu thay phải **vừa đúng số byte cũ**
+— cùng cái trần `patchstr.py` đang chịu, và khá chật với tiếng Việt.
+
+### `tid.py` — đọc texture `.tid` trong GAME.cpk
+
+```bash
+python tools/tid.py list   GAME.cpk
+python tools/tid.py list   GAME.cpk TITLE
+python tools/tid.py unpack GAME.cpk TITLE/ work/tid
+```
+
+GAME.cpk không có file text nào — 714 texture `.tid` và 777 sprite `.CL3`.
+Header 128 byte, `width` ở 0x44, `height` ở 0x48, FOURCC ở 0x64:
+`DXT1` (0,5 byte/px), `DXT5` / `BC7 ` (1,0), hoặc **bốn byte NUL** — không
+phải format nén mà là **BGRA 32-bit thô**.
+
+**Dữ liệu xếp tuyến tính, không swizzle.** Texture Switch thường lưu
+block-linear, phải gỡ tile trước khi giải mã. Cái này thì không, nên
+Pillow đọc thẳng và `tid.py` chỉ là bộ đọc header. Đây là **kiểm chứ**
+chứ không phải đoán: block đầu của `title_bg1.tid` ra màu liền mạch
+chứ không rời rạc như khi bị tile, rồi đem so với ảnh chụp màn hình.
+
+`list` in `width x height x byte/px` so với payload từng file, nên header
+đọc sai sẽ hiện ra thành lệch kích thước chứ không thành ảnh sai.
+
+**Rất nhiều chữ giao diện được vẽ thẳng vào ảnh.** Cả thanh menu màn
+tiêu đề (Start, Load, Flowchart, Scene List, Special, Options) nằm trong
+một atlas BC7 2048x1024, mỗi mục 3 trạng thái, kèm logo, "Press Any
+Button" và dòng copyright. Chữ "Glossary", "Notes", "-NEW-" nằm trong
+`dictionary_parts.tid`; tên nhân vật nằm trong `chsel_face*.tid`.
+`mksheet.py` không thể với tới — dịch mấy cái đó là **vẽ lại**.
+
+**Ghi ngược chưa làm được.** Pillow giải mã BCn nhưng không mã hóa,
+nên muốn nhét atlas đã vẽ lại vào game thì cần thêm bộ nén.
+
 ### `applyui.py` — ghi dòng giao diện vào SYSTEM.cpk
 
 ```bash

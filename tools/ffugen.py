@@ -110,7 +110,7 @@ def measure(chain, chars):
     return lo, hi
 
 
-def render(chain, ch, H, y_off, tracking=0):
+def render(chain, ch, H, y_off, tracking=0, glow=0.0):
     """Return (advance, width, rows), or None. rows = list[list[0..15]].
 
     The glyph is spaced by its own typeface, plus `tracking` columns. See the
@@ -128,6 +128,18 @@ def render(chain, ch, H, y_off, tracking=0):
     pad = max(8, guess + 16)
     im = Image.new('L', (pad, H), 0)
     ImageDraw.Draw(im).text((0, y_off), ch, font=s.font, fill=255)
+    if glow:
+        # The stock glyphs are SOFT, and a straight render is not. Down the
+        # middle of advfont1's 'o' the game goes 2 4 4 4 4 6 a d f f f, four to
+        # five pixels of ramp on each side of the stroke, where PIL at the same
+        # size gives 1 8 f - two pixels and done. Quantising to 4bpp then turns
+        # that hard edge into visible stair-stepping, which is what reads as
+        # rough next to the specimen. Blurring the coverage before it is
+        # quantised reproduces the ramp; it widens the glyph slightly, the same
+        # way the stock one is wider than its own outline.
+        from PIL import ImageFilter
+        im = im.filter(ImageFilter.GaussianBlur(glow))
+
     px = list(im.getdata())
     cols = [x for x in range(pad)
             if any(px[y * pad + x] for y in range(H))]
@@ -228,7 +240,7 @@ def pack(rows):
 
 
 def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
-          tracking=0, space_ratio=0.0):
+          tracking=0, space_ratio=0.0, glow=0.0):
     """Build a new .ffu from rendered and template bitmaps."""
     base_old = baseline_of(tpl)
     shift = base_new - base_old          # shift old glyphs to the new baseline
@@ -250,7 +262,7 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
     entries, order = [], sorted(chars, key=FFU.u8i)
     n_new = n_kept = n_skip = 0
     for ch in order:
-        r = render(chain, ch, H, y_off, tracking)
+        r = render(chain, ch, H, y_off, tracking, glow)
         if r is not None:
             adv, w, rows = r
             entries.append((ch, adv, H, pack(rows)))
@@ -342,6 +354,10 @@ def main():
                          "the source font's own. The stock fonts sit at 0.56-0.59 "
                          "while these Latin faces give 0.31-0.44, which is what "
                          "glues words together on screen")
+    ap.add_argument('--glow', type=float, default=0.0,
+                    help='blur the glyph coverage before quantising, to get the '
+                         'soft edge ramp the stock fonts have; without it a 4bpp '
+                         'render stair-steps. About 1.0 matches advfont1')
     ap.add_argument('--tracking', type=int, default=0,
                     help='extra columns added to every advance; small cells lose '
                          'the source font side bearings to rounding, so the stock '
@@ -393,6 +409,20 @@ def main():
         # bottom of the cell and shears 11 px off every descender.
         H = a.cell
         y_off = baseline_of(tpl) - chain.sources[0].font.getmetrics()[0]
+        # The template's baseline leaves only 16 rows beneath it, and these
+        # Latin faces cut a deeper descender than the game's own: at cap 54
+        # Newsreader runs to row 91 and loses the tails of g y q p j. The whole
+        # lowercase set does fit the cell - 83 rows of 88 - just not at that
+        # baseline, so slide it up until the tails clear. What is pushed off the
+        # top is the stacked tone marks on CAPITALS, which reach 0.1% of the
+        # translated lines, against descenders that are in almost every word.
+        lower = [c for c in VN_CHARS if not c.isupper()]
+        lower += list('abcdefghijklmnopqrstuvwxyz')
+        lo_ink, hi_ink = measure(chain, lower)
+        overflow = (y_off + hi_ink) - (H - 1)
+        if overflow > 0:
+            y_off -= overflow
+            print('chan chu : day len %d hang de duoi chu khong bi cat' % overflow)
     base_new = y_off + chain.sources[0].font.getmetrics()[0]
     print('o glyph  : cao %d px (ink %d..%d), baseline %d'
           % (H, lo, hi, base_new))
@@ -400,7 +430,8 @@ def main():
         raise SystemExit('cell height %d > 255, lower --px' % H)
 
     data = build(tpl, chain, H, y_off, base_new, add_vn=not a.no_vn,
-                 tracking=a.tracking, space_ratio=a.space_ratio)
+                 tracking=a.tracking, space_ratio=a.space_ratio,
+                 glow=a.glow)
     with open(a.out, 'wb') as fh:
         fh.write(data)
     print('-> %s (%s byte)' % (a.out, format(len(data), ',')))
