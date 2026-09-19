@@ -4,6 +4,7 @@ mksheet.py - dump every translatable string in the game into a spreadsheet.
     python mksheet.py --out sheet.xlsx
     python mksheet.py --story work/story-us --system SYSTEM.cpk --out sheet.xlsx
     python mksheet.py --story STORY.cpk --no-system --no-jp --out story.xlsx
+    python mksheet.py --merge Shuuen_JP_STORY.xlsx --out sheet.xlsx
 
 Every path argument takes either a .cpk or a directory of files already unpacked
 from one. The workbook written here is the one `checksheet.py` and
@@ -11,7 +12,8 @@ from one. The workbook written here is the one `checksheet.py` and
 
     ID | source (EN) | target (VI) | japanese | note | kind | bytes
 
-with the target column left empty.
+with the target column left empty - or filled in from an existing translation,
+plus `vi_bytes` and `canh bao`, when `--merge` is given.
 
 COLUMN ORDER IS LOAD-BEARING
     `checksheet.rows_of()` reads the source from column B and the target from
@@ -97,13 +99,30 @@ DATABASE COLUMNS ARE PICKED BY HAND
     Rows are de-duplicated by text because `gbnl.build()` is keyed by text, not
     by cell: one translation of 'Act 1' updates all 450 cells holding it.
 
-THE LINE BUDGET
-    Story text is stored one screen line per block and the engine's line buffer
-    is fixed: no block in the stock build exceeds 84 bytes, and 98-byte blocks
-    crash the main story. The `bytes` column carries the source length so a
-    translator can see the budget; Vietnamese diacritics cost 2 bytes each. The
-    limit is a script one - `ui` rows go back through `gbnl.py`, which rebuilds
-    the string pool and lets text grow.
+THE LINE BUDGET IS A WIDTH, AND THERE IS NO BYTE LIMIT
+    A probe build put lines of 100 to 800 bytes into the prologue and the game
+    ran through every one of them. What it did was draw them off the right of
+    the screen: the box overflows on WIDTH, and the "84 bytes" this file used to
+    warn about was only the widest line stock English happened to need.
+
+    Width is measured through `textwidth.py`, and two things have to be right or
+    the answer is silently wrong. Measure the fonts that will SHIP, not the
+    stock ones - the same sentence is 1851 units in stock advfont1 and 2123 in
+    the shipped one. And compare against the box, not against the widest stock
+    line: 3200 units for narration, 2990 for the message box, 2430 for the
+    backlog, all read off the probe. `qua rong` uses the backlog, because every
+    line of dialogue is replayed there.
+
+    The `bytes` column is kept as a rough guide, and `qua dai` only appears when
+    no font could be loaded. `ui` rows have no width limit worth enforcing here:
+    they go back through `gbnl.py`, which rebuilds the string pool.
+
+MERGING AN EXISTING TRANSLATION
+    `--merge` takes a sheet that already carries the EN ID column this tool
+    writes, fills its Vietnamese into the target column and flags what needs a
+    second look. Rows are keyed by that id, not by content: the ids are exact
+    byte offsets into the build being extracted, so the fill is exact and needs
+    none of the content matching `applystory.py` falls back on.
 """
 import argparse
 import collections
@@ -111,12 +130,15 @@ import os
 import re
 import struct
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stcm2l import Script                          # noqa: E402
 from gbnl import GBNL                              # noqa: E402
 from cpk import CPK                                # noqa: E402
 from portjp2us import align                        # noqa: E402
+from textwidth import Widths, CEILING              # noqa: E402
+from linebreak import to_sheet, to_game            # noqa: E402
 
 # Opcode -> role, as laid out in the English build. Rebased per file; see above.
 STORY_ROLES = {
@@ -150,12 +172,29 @@ DB_COLUMNS = {
     'strSystem.gstr': [(16, 'ui')],
 }
 
+# Where build.py writes the archive that actually gets installed. The stock one
+# carries different fonts: the same sentence measures 1851 units against stock
+# advfont1 and 2123 against the shipped one, so measuring the wrong file puts
+# every width out by 15%.
+SHIPPED_FONT = os.path.join('dist', 'SYSTEM.cpk')
+STOCK_FONT = 'SYSTEM.cpk'
+
 PROSE_RX = re.compile(r'[a-z]')
 SPACERS = ' \t　'
+
+# The inline commands the engine parses. A greedy `#[A-Za-z]+` swallows the word
+# after a #n line break, making `#nto` and `#nand` read as different commands.
+# On the shipped text the two spellings disagree about only one row either way,
+# so this is correctness rather than a fix for a real miscount.
+MARKUP_RX = re.compile(r'#(?:NAME|Color)\[\d+\]|#n')
+
+# Byte budget for one script line; see THE LINE BUDGET above.
+MAX_LINE_BYTES = 84
 
 COLUMNS_HEAD = [('ID', 26), ('Nguon (EN)', 60), ('Tieng Viet', 60)]
 COLUMNS_JP = [('Tieng Nhat', 50)]
 COLUMNS_TAIL = [('Ghi chu', 22), ('kind', 8), ('bytes', 7)]
+COLUMNS_MERGE = [('vi_bytes', 9), ('canh bao', 26)]
 
 
 # --------------------------------------------------------------------- story
@@ -198,7 +237,11 @@ def cell_text(block, allow_short):
 
 
 def story_rows(script, delta):
-    """(id, source, role, (ins_i, blk_i)) for every translatable block."""
+    """(id, source, role, (ins_i, blk_i), capacity) for every translatable block.
+
+    `capacity` is the block's payload size as shipped, which is how many bytes a
+    replacement can use without the block having to grow. See THE LINE BUDGET.
+    """
     roles = {op + delta: role for op, role in STORY_ROLES.items()}
     for i, ins in enumerate(script.instructions):
         role = roles.get(ins.opcode)
@@ -209,7 +252,8 @@ def story_rows(script, delta):
             t = cell_text(b, allow_short=role in SINGLE_BLOCK)
             if t is None:
                 continue
-            yield '%d___%X_%s' % (i, b.data_off, role), t, role, (i, blk_i)
+            yield ('%d___%X_%s' % (i, b.data_off, role), t, role, (i, blk_i),
+                   len(b.raw))
 
 
 def jp_story_map(en, jp, en_delta):
@@ -250,7 +294,10 @@ def jp_story_map(en, jp, en_delta):
 # ------------------------------------------------------------------ database
 
 def db_rows(g, cols):
-    """(id, source, role, (record, col)) for each distinct string in `cols`.
+    """(id, source, role, (record, col), None) for each distinct string in `cols`.
+
+    Capacity is None because `gbnl.build()` rebuilds the whole string pool and
+    remaps the offsets, so these strings are free to grow.
 
     Keyed by text, not by cell, to match how `gbnl.build()` applies a
     translation back - it rewrites every cell pointing at the string, so one
@@ -265,7 +312,8 @@ def db_rows(g, cols):
             if not t.strip(SPACERS) or t in seen:
                 continue
             seen.add(t)
-            yield '%d.%d___%X_%s' % (i, col // 8, rel, role), t, role, (i, col)
+            yield ('%d.%d___%X_%s' % (i, col // 8, rel, role), t, role, (i, col),
+                   None)
 
 
 def col_spans(g):
@@ -335,6 +383,145 @@ def jp_db_map(gj, cols, pairs):
     return out
 
 
+# ---------------------------------------------------------------- merging in
+
+ID_CELL_RX = re.compile(r'^\d+___[0-9A-F]+_(?:text|name|choice|title|var)$')
+DOTS_RX = re.compile(r'[.]{2,}')
+SPACE_RX = re.compile(r'[\s　]+')
+
+
+def normalise_jp(s):
+    """Fold a Japanese line down to what survives a CSV round-trip.
+
+    A sheet that has been through CSV comes back with its punctuation mangled -
+    `……` flattened to `...`, `――` and the closing `」` dropped. Comparing raw
+    text would call 3,058 sound rows a mismatch, so both sides are folded before
+    they are compared and only real differences are flagged.
+    """
+    s = unicodedata.normalize('NFKC', s or '')
+    for a, b in (('…', '...'), ('―', '-'), ('─', '-'), ('‐', '-')):
+        s = s.replace(a, b)
+    return SPACE_RX.sub('', DOTS_RX.sub('...', s))
+
+
+def load_merge(path):
+    """{worksheet: {english id: (vietnamese, japanese)}} from a translation sheet.
+
+    The sheet is anchored to the Japanese build - its own ID column addresses
+    the Japanese scripts - and carries a second column of the English ids this
+    tool wrote, which is what the rows are keyed by here.
+
+    That column is found by its HEADER. Finding it by content does not work:
+    a Japanese anchor reads `1___48EFC_text` and an English one
+    `4150___48F08_text`, the same shape, so a content scan locks onto whichever
+    column comes first - the Japanese one - and then nothing resolves. The
+    fallback for a sheet with no `EN ID` header is a content scan that skips the
+    sheet's own anchor in column A.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    out, guessed = {}, []
+    for name in wb.sheetnames:
+        if not name.isdigit():
+            continue
+        rows = wb[name].iter_rows(values_only=True)
+        header = [str(c).strip().lower() if c else '' for c in next(rows, ())]
+        vi_col = header.index('vietnamese') if 'vietnamese' in header else 2
+        id_col = header.index('en id') if 'en id' in header else None
+
+        table = {}
+        for r in rows:
+            if id_col is None:
+                for k, c in enumerate(r):
+                    if k and c and ID_CELL_RX.match(str(c).strip()):
+                        id_col = k
+                        guessed.append('%s:%s' % (name, k))
+                        break
+                if id_col is None:
+                    continue
+            if id_col >= len(r) or not r[id_col]:
+                continue
+            eid = str(r[id_col]).strip()
+            if not ID_CELL_RX.match(eid):
+                continue
+            vi = to_game(str(r[vi_col]).strip()) if vi_col < len(r) and r[vi_col] else ''
+            jp = to_game(str(r[1]).strip()) if len(r) > 1 and r[1] else ''
+            table[eid] = (vi, jp)
+        out[name] = table
+    if guessed:
+        print('   !! khong co cot "EN ID", doan theo noi dung: %s'
+              % ', '.join(guessed[:8]))
+    return out
+
+
+def load_fonts(path):
+    """Dialogue fonts for measuring, or None. Says when it is measuring stock.
+
+    Duplicated in applyvi.py rather than shared: putting it in textwidth.py
+    would tie that module to a build layout it does not otherwise know about,
+    and the policy is eight lines.
+    """
+    if not os.path.exists(path):
+        if path == SHIPPED_FONT and os.path.exists(STOCK_FONT):
+            print('!! khong thay %s - do bang font GOC %s, so se KHONG dung '
+                  'voi font se ship' % (path, STOCK_FONT))
+            path = STOCK_FONT
+        else:
+            print('!! khong thay font (%s) - bo qua phep do be rong' % path)
+            return None
+    try:
+        return Widths.from_cpk(path)
+    except ValueError as e:
+        print('!! khong do duoc be rong: %s' % e)
+        return None
+
+
+def warnings_for(vi, en, jp_theirs, jp_mine, cap, widths=None, ceiling=CEILING):
+    """[(code, text)] saying why this row needs a human look before it ships.
+
+    `khong vua block` the line needs more bytes than the block it replaces, so
+                   that block has to grow. `stcm2l.build()` can do that and
+                   re-offsets everything downstream, but `portjp2us.py` records
+                   the opposite from testing on hardware: a block that changes
+                   size shifts every later instruction and the engine crashes,
+                   while a same-size replacement runs. Flagged rather than
+                   silently trusted, because the two findings disagree
+    `qua rong`     the line draws wider than the box it has to fit, measured
+                   through the fonts that will ship and against the backlog -
+                   the narrowest of the three screens, and the one every line
+                   of dialogue is replayed in. Bytes only stand in for this
+                   when no font is at hand, and stand in badly
+    `qua dai`      the byte fallback, used only without a font
+    `markup lech`  the inline commands differ from the block being overwritten,
+                   which is what crashed 605.DAT - a #NAME[1] landing in a block
+                   whose instruction carries no name context makes the engine
+                   resolve a name through a garbage pointer
+    `cau Nhat lech` the Japanese this was translated from is not the Japanese
+                   that sits at this position in the Japanese build, so the two
+                   builds split the box into a different number of lines here
+    """
+    if not vi:
+        return [('chua dich', 'chua dich')]
+    out = []
+    n = len(vi.encode('utf-8'))
+    if cap and n + 1 > cap:
+        out.append(('khong vua block', 'khong vua block (%dB > %dB)' % (n + 1, cap)))
+    # Width is what actually overflows the box; bytes only stand in for it when
+    # no font is at hand, and they disagree in both directions.
+    if widths is not None:
+        overshoot = widths.over(vi, ceiling)
+        if overshoot > 0:
+            out.append(('qua rong', 'qua rong +%dpx' % overshoot))
+    elif n > MAX_LINE_BYTES:
+        out.append(('qua dai', 'qua dai %dB' % n))
+    if collections.Counter(MARKUP_RX.findall(vi)) != \
+            collections.Counter(MARKUP_RX.findall(en or '')):
+        out.append(('markup lech', 'markup lech'))
+    if jp_theirs and jp_mine and normalise_jp(jp_theirs) != normalise_jp(jp_mine):
+        out.append(('cau Nhat lech', 'cau Nhat lech'))
+    return out
+
+
 # --------------------------------------------------------------------- input
 
 def read_sources(path, suffixes):
@@ -369,7 +556,7 @@ def sheet_name(basename):
 class Workbook:
     """Thin wrapper so the row loops stay free of openpyxl detail."""
 
-    def __init__(self, with_jp):
+    def __init__(self, with_jp, with_merge):
         import openpyxl
         from openpyxl.cell import WriteOnlyCell
         from openpyxl.styles import Alignment, Font
@@ -378,10 +565,12 @@ class Workbook:
         self.head_font = Font(bold=True)
         self.wrap = Alignment(wrap_text=True, vertical='top')
         self.with_jp = with_jp
-        self.columns = COLUMNS_HEAD + (COLUMNS_JP if with_jp else []) + COLUMNS_TAIL
+        self.with_merge = with_merge
+        self.columns = (COLUMNS_HEAD + (COLUMNS_JP if with_jp else []) +
+                        COLUMNS_TAIL + (COLUMNS_MERGE if with_merge else []))
 
     def add(self, name, rows):
-        """One worksheet; `rows` is an iterable of (id, source, japanese, kind)."""
+        """One worksheet; `rows` yields (id, source, japanese, kind, vi, warning)."""
         ws = self.wb.create_sheet(name)
         for i, (_label, width) in enumerate(self.columns):
             ws.column_dimensions[chr(ord('A') + i)].width = width
@@ -393,11 +582,18 @@ class Workbook:
             head.append(c)
         ws.append(head)
         n = 0
-        for rid, src, jp, kind in rows:
-            cells = [rid, self._wrapped(ws, src), self._wrapped(ws, None)]
+        for rid, src, jp, kind, vi, warn in rows:
+            # Byte counts are the game's and are taken BEFORE #n becomes a
+            # newline: the break costs two bytes on disk and one in a cell.
+            src_bytes = len(src.encode('utf-8'))
+            vi_bytes = len(vi.encode('utf-8')) if vi else None
+            cells = [rid, self._wrapped(ws, to_sheet(src)),
+                     self._wrapped(ws, to_sheet(vi) or None)]
             if self.with_jp:
-                cells.append(self._wrapped(ws, jp))
-            cells += [None, kind, len(src.encode('utf-8'))]
+                cells.append(self._wrapped(ws, to_sheet(jp)))
+            cells += [None, kind, src_bytes]
+            if self.with_merge:
+                cells += [vi_bytes, warn or None]
             ws.append(cells)
             n += 1
         if n:
@@ -420,7 +616,7 @@ class Workbook:
         self.wb.save(path)
 
 
-def readme(with_jp):
+def readme(with_jp, with_merge=False):
     out = [
         'BANG DICH VIRCHE EVERMORE - ban tieng Anh 01009CF01BAC4000',
         '',
@@ -457,15 +653,42 @@ def readme(with_jp):
             'chu chua chac cung mot cau. Dung de tham khao sac thai va ten rieng,',
             'nhat la khi ban tieng Anh dich thoang.',
         ]
+    if with_merge:
+        out += [
+            '',
+            'COT "canh bao" danh dau dong can soat lai truoc khi dua vao game:',
+            '  khong vua block  cau dich can nhieu byte hon block goc. stcm2l.py',
+            '                 dung lai duoc file khi block phinh ra, nhung',
+            '                 portjp2us.py ghi nhan thu tren may that thi doi kich',
+            '                 thuoc block lam treo game. Hai ket luan nay dang',
+            '                 mau thuan, nen day la dong rui ro nhat - viet ngan',
+            '                 lai cho vua la chac chan an toan',
+            '  qua rong +Npx  cau ve ra rong hon khung backlog (man hep nhat,',
+            '                 noi moi cau thoai deu duoc chieu lai). Do bang font',
+            '                 se ship that, khong phai font goc.',
+            '  qua dai NNB    chi hien khi khong nap duoc font de do be rong',
+            '  markup lech    ma lenh trong cau dich khac voi block tieng Anh bi',
+            '                 ghi de - dung loi da lam treo 605.DAT, khi #NAME[1]',
+            '                 roi vao block khong co ngu canh ten',
+            '  cau Nhat lech  cau tieng Nhat dung de dich khong phai cau nam o vi',
+            '                 tri nay ben ban Nhat: doan do hai ban ngat so dong',
+            '                 khac nhau, nen doc ca khung thoai roi chinh lai',
+            '  chua dich      chua co ban dich cho dong nay',
+            '',
+            'Sua xong thi xoa noi dung cot "canh bao" de biet dong nao da soat.',
+        ]
     out += [
         '',
-        'DO DAI DONG: moi dong thoai la mot dong tren man hinh, do chieu dai theo',
-        'BYTE UTF-8 (cot "bytes" la so byte cua cau goc tieng Anh). Ban goc khong',
-        'co dong nao qua 84 byte; dong 98 byte lam treo game. Chu Viet co dau ton',
-        '2 byte moi chu, nen cau 40 ky tu co the da la 55 byte - ngat cau thanh',
-        'nhieu dong thay vi viet dai.',
+        'DO DAI DONG: moi dong thoai la mot dong tren man hinh. Gioi han KHONG',
+        'phai so byte ma la BE RONG khi ve ra - da thu dong 800 byte, game van',
+        'chay, chi la chu tran ra ngoai man hinh. Cot "canh bao" ghi ro tran bao',
+        'nhieu (vi du "qua rong +174px"), nen biet duoc la chi can bot mot chu',
+        'hay phai ngat dong.',
         '',
-        'Gioi han 84 byte chi ap cho sheet kich ban. Cac sheet ten chu (kind = ui)',
+        'Chu Viet co dau ton 2 byte moi chu nhung ve ra van la mot chu, nen dem',
+        'byte khong noi len dieu gi ve be rong - dung tin cot "bytes".',
+        '',
+        'Gioi han nay chi ap cho sheet kich ban. Cac sheet ten chu (kind = ui)',
         'duoc dung lai toan bo vung chuoi khi ghi vao game nen dai bao nhieu cung',
         'duoc - vi du mo ta trong dbDictionary von da dai 120-170 byte.',
     ]
@@ -487,6 +710,16 @@ def main():
     ap.add_argument('--no-system', action='store_true')
     ap.add_argument('--no-jp', action='store_true',
                     help='leave out the Japanese reference column')
+    ap.add_argument('--font', default=SHIPPED_FONT,
+                    help='the SYSTEM.cpk that will be INSTALLED, whose fonts '
+                         'the game draws with; the stock archive measures a '
+                         'different font and gives wrong widths')
+    ap.add_argument('--ceiling', type=int, default=CEILING,
+                    help='box width in advance units (default %d, the backlog, '
+                         'narrowest of the three screens)' % CEILING)
+    ap.add_argument('--merge',
+                    help='a translation sheet carrying this tool\'s EN ID column; '
+                         'its Vietnamese is filled in and flagged for review')
     ap.add_argument('--sheet', action='append',
                     help='limit to these script files (repeatable)')
     a = ap.parse_args()
@@ -497,11 +730,38 @@ def main():
     if not a.no_jp and not with_jp:
         print('!! khong thay ban tieng Nhat (%s) - bo cot tieng Nhat' % a.jp_story)
 
-    wb = Workbook(with_jp)
-    wb.add_readme(readme(with_jp))
+    merge = load_merge(a.merge) if a.merge else {}
+    if a.merge:
+        print('ban dich: %s sheet, %s dong co EN ID' %
+              (len(merge), format(sum(len(v) for v in merge.values()), ',')))
+
+    widths, ceiling = None, a.ceiling
+    if merge:
+        widths = load_fonts(a.font)
+        if widths is not None:
+            print('do be rong bang %s | tran %d don vi (khung backlog)'
+                  % (a.font, ceiling))
+
+    wb = Workbook(with_jp, bool(merge))
+    wb.add_readme(readme(with_jp, bool(merge)))
     kinds = collections.Counter()
+    warned = collections.Counter()
     skipped = []
-    total = jp_filled = jp_total = 0
+    total = jp_filled = jp_total = translated = 0
+
+    def finish(rows, jmap, table):
+        """Extracted rows -> worksheet rows, filling in and flagging the merge."""
+        out = []
+        for rid, src, role, coord, cap in rows:
+            jp_mine = jmap.get(coord)
+            vi, jp_theirs = table.get(rid, ('', ''))
+            flags = warnings_for(vi, src, jp_theirs, jp_mine, cap,
+                                 widths, ceiling) if merge else []
+            for code, _text in flags:
+                warned[code] += 1
+            out.append((rid, src, jp_mine, role, vi,
+                        ', '.join(t for _c, t in flags)))
+        return out
 
     if not a.no_story:
         print('%-14s %8s %8s %8s %8s %8s %7s %7s' %
@@ -529,15 +789,15 @@ def main():
                     jmap = jp_story_map(script, Script(jp_story[base]), delta)
                 except ValueError as e:
                     skipped.append('%s (JP): %s' % (base, e))
-            got = sum(1 for _r, _s, _k, c in rows if c in jmap)
+            got = sum(1 for r in rows if r[3] in jmap)
             jp_filled += got
             jp_total += len(rows)
 
             per = collections.Counter(r[2] for r in rows)
             kinds.update(per)
-            total += wb.add(sheet_name(base),
-                            ((rid, src, jmap.get(coord), role)
-                             for rid, src, role, coord in rows))
+            final = finish(rows, jmap, merge.get(sheet_name(base), {}))
+            translated += sum(1 for f in final if f[4])
+            total += wb.add(sheet_name(base), final)
             print('%-14s %8d %8d %8d %8d %8d %7d %6.1f%%' %
                   (base, per['text'], per['name'], per['choice'], per['title'],
                    per['var'], delta, got * 100.0 / len(rows)))
@@ -566,13 +826,13 @@ def main():
             taken = {c for c, _role in cols}
             unknown = [c for c in g.str_cols if c not in taken]
             rows = list(db_rows(g, cols))
-            got = sum(1 for _r, _s, _k, c in rows if c in jmap)
+            got = sum(1 for r in rows if r[3] in jmap)
             jp_filled += got
             jp_total += len(rows)
             kinds.update(r[2] for r in rows)
-            total += wb.add(sheet_name(base),
-                            ((rid, src, jmap.get(coord), role)
-                             for rid, src, role, coord in rows))
+            final = finish(rows, jmap, merge.get(sheet_name(base), {}))
+            translated += sum(1 for f in final if f[4])
+            total += wb.add(sheet_name(base), final)
             print('%-24s %8d  %-22s%s' %
                   (base, len(rows), how,
                    '(bo qua cot %s)' % unknown if unknown else ''))
@@ -587,6 +847,13 @@ def main():
         print('co doi chieu tieng Nhat: %s / %s dong (%.1f%%)' %
               (format(jp_filled, ','), format(jp_total, ','),
                jp_filled * 100.0 / jp_total))
+    if merge:
+        print('da co ban dich: %s / %s dong (%.1f%%)' %
+              (format(translated, ','), format(total, ','),
+               translated * 100.0 / total))
+        print('can soat lai truoc khi dua vao game:')
+        for code, n in warned.most_common():
+            print('   %-16s %s dong' % (code, format(n, ',')))
     if skipped:
         print('bo qua %d file khong co van ban nguoi choi doc duoc:' % len(skipped))
         for s in skipped[:6]:

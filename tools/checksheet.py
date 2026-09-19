@@ -23,6 +23,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from linebreak import to_game                    # noqa: E402
+
 ID_RX = re.compile(r'^([\d.]+)_+([0-9A-Fa-f]+)_(text|name|choice|title|var|ui)$')
 
 
@@ -41,7 +44,11 @@ def rows_of(ws):
             continue
         src = (r[1] or '') if len(r) > 1 else ''
         tgt = (r[2] or '') if len(r) > 2 else ''
-        yield str(r[0]).strip(), int(m.group(2), 16), m.group(3), str(src), str(tgt)
+        # The sheet holds real newlines; the script holds #n. Both columns
+        # are handed back in the game's spelling so callers can compare them
+        # against a block byte for byte.
+        yield (str(r[0]).strip(), int(m.group(2), 16), m.group(3),
+               to_game(str(src)), to_game(str(tgt)))
 
 
 def cstr(d, off):
