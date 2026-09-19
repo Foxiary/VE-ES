@@ -110,7 +110,133 @@ string.
 
 Text is plain UTF-8 and `#n` is the engine's line break.
 
+## Scripts: `.DAT` (STCM2L)
+
+`tools/stcm2l.py`. The dialogue itself, 117 files in `STORY.cpk`.
+
+```
+0x00   "STCM2L <build date>"          0x20  u32 -> EXPORT_DATA, u32 ?,
+                                            u32 export count, u32 -> COLLECTION_LINK
+0x50   "GLOBAL_DATA"                  0x1F0 "CODE_START_"
+...    instruction stream             then  EXPORT_DATA, COLLECTION_LINK
+
+INSTRUCTION  u32 global_call, u32 opcode, u32 param_count, u32 length
+PARAMETER    12 bytes: (value, jump, tag)
+DATA BLOCK   u32 flag, u32 nwords, u32 one, u32 length, payload padded to 4
+```
+
+**Three fields hold absolute addresses, and none of them look like pointers.**
+All three were missing from the rebuild at some point, and each produced a
+different symptom, none of which the existing checks could see:
+
+| field | count (EN build) | symptom when stale |
+|---|---|---|
+| `opcode`, when `global_call == 1` | 350,273 of 718,773 | — |
+| parameter word 2, opcodes 3 and 6 | 72,057 | **black screen** |
+| `COLLECTION_LINK + 4` = total file size | 1 per file | — |
+
+`global_call == 1` means the second field is not an opcode but the address of
+the instruction to CALL. Opcode 3 is a conditional branch and keeps its target
+in parameter 3; opcode 6 is a goto and keeps it in parameter 0 — 100% of both
+land exactly on an instruction start. Word 3 of a parameter is never an address.
+
+**Anything pointing at an instruction must be written in a second pass.** A
+forward jump or call names an instruction whose new offset is not known yet
+while the first pass is still laying instructions out, so emitting it there
+silently keeps the old address. Doing that fixed only the backward jumps — 15 of
+609 in `100.DAT` — and looked like it worked.
+
+**Growing a block is safe** once all three are rebased: 54 files, +1.13 MB, call
+graph and jump graph identical, verified in game. The older note in
+`portjp2us.py` that a size change crashes was describing these stale pointers,
+not a rule of the format.
+
+## Text limits: width, not bytes
+
+**There is no byte limit.** A probe build put lines of 100, 150, 200, 300, 500
+and 800 bytes on screen; the game ran through all of them. The "84 bytes" that
+both stock builds happen to stop at is not an engine constant — it is just how
+wide English needed to be.
+
+**What overflows is the rendered width**, and bytes are a bad proxy for it:
+Vietnamese spends two bytes on an accented letter and draws it as one ordinary
+glyph. Measured on the translation the two disagree in both directions, and a
+line of exactly 84 bytes was found 26% wider than the widest stock line.
+
+`tools/textwidth.py` sums the glyph advances out of the `.ffu` table. Box widths
+were read off a probe build rather than guessed:
+
+| screen | advance units |
+|---|---|
+| narration (full width) | ~3200 |
+| message box | ~2990 |
+| **backlog** | **~2430** |
+
+Design against the backlog: it replays every line of dialogue, so a line that
+fits the message box and not the backlog is still broken. One ceiling covers all
+four fonts — they share a cell height, so a unit is the same on screen in each;
+what differs is how many units a sentence costs, which is why a line is only
+safe when it fits under the ceiling in *all four*.
+
+**Measure with the font that ships, not the stock one.** The build replaces
+`SYSTEM.cpk` with regenerated Vietnamese fonts whose metrics differ. Measuring
+the stock file makes advfont3 come out wider than advfont1 (3068 vs 2998) for a
+string that is plainly narrower in advfont3 on screen — with the shipped fonts
+it is 3032 vs 3198. Every width number taken from the wrong file is wrong.
+
 ## Traps that produce silently wrong results
+
+**Structural checks cannot see a stale pointer.** `Script.check()` and
+`check_pointers()` both pass on a file whose 6,539 call targets all point into
+the middle of the wrong instruction — neither one reads the `opcode` field or a
+parameter's jump word. Clean checks are not evidence the game runs; only running
+it is. Compare `call_targets()` and `jump_targets()` across a rebuild instead,
+in instruction indices, and confirm on hardware.
+
+**Reproduce minimally before theorising.** Three separate fixes were shipped on
+the strength of clean structural checks and all three still crashed. What found
+the real cause in one pass was a build differing from stock by eight bytes and
+one line: the diff was small enough to read in full, and the 26 words that
+should have moved and had not were all in the same field.
+
+**A spreadsheet holds real newlines; the game holds `#n`.** Every sheet is
+written with `linebreak.to_sheet()` and must be read back through
+`linebreak.to_game()` — `mksheet`, `glossary`, `checksheet`, `applyvi`,
+`applyen` and `reflow` all do. A reader that skips it sees a source column
+that no longer matches any block and silently applies nothing. The swap is
+lossless because no shipped string contains a raw control character (checked
+over all 97,110 extractable rows) and `#n` is the only command spelled with a
+lowercase `n`. Byte counts are taken before the swap: a break is two bytes in
+the game and one in a cell. Sheets written before this carry literal `#n` and
+still apply unchanged — `to_game()` leaves them alone.
+
+**Fitting a font on one dimension distorts every other one.** `ffugen` sizes the
+source to the template's cap height, and that is the only measure it then
+matches. Three attempts at closing the visible gap each fixed one number and
+broke another: matching cap height left the strokes 36% thinner than stock;
+matching the vertical stem made the face read as bold, because the stock stem
+ratio is 1.33 and the Latin serifs are near 2.0, so equal stems mean much
+thinner horizontals; forcing every glyph to a uniform side bearing opened a hole
+after `f`, whose hook is drawn to overhang on purpose. Measure the ratio and the
+dimensions not being fitted - stem vertical/horizontal, x-height, the width of a
+reference string - before concluding a font matches.
+
+**Small cells lose the source font's side bearings to rounding.** At sysfont's
+cap height of 23 the bearings round to nothing: the stock font leaves 4.8 blank
+columns around the average Latin glyph and a rendered one keeps 0.8, so the text
+comes out 31% narrow while the ink is within 8% of stock. Eight source families
+all measured 22-34% too narrow, which looked like every one of them being
+condensed and was not. `ffugen --tracking N` adds the columns back; sysfont
+needs 6, and the 88px advfont cells need none.
+
+**A chapter title is `<japanese key>@<display text>`.** The key is what the
+flowchart looks the scene up by; losing it corrupts the scene table rather than
+just the text. Every translated title in the imported sheet had lost it, and
+carried a line of dialogue from elsewhere instead of a title, so `applyvi.py`
+refuses a title row whose `key@` prefix does not survive rather than repairing
+it.
+
+
 
 **Header height out of sync crashes the game.** `0x0A` / `0x0E` is what the
 engine sizes its draw buffer from. Writing 108px glyphs while the header still
@@ -156,6 +282,21 @@ See `tools/README.md`. The short version:
 - `gbnl.py` — read/rebuild `.gbin` and `.gstr` (offsets remapped, text may grow)
 - `patchstr.py` — in-place `.gstr` edits (length-capped)
 - `translate_glossary.py` — the sample translations used to check rendering
+
+The text pipeline, in the order it runs:
+
+- `stcm2l.py` — read/rebuild `.DAT`; `check_calls()` and `jump_targets()` are
+  the checks that matter after a rebuild
+- `mksheet.py` — extract every translatable string to `.xlsx`; `--merge` folds
+  in an existing translation and flags what needs review
+- `glossary.py` — the same thing for the Glossary screen alone
+- `linebreak.py` — `#n` on the way out of a sheet, a real newline on the way in
+- `textwidth.py` — how wide a line actually draws, and the measured ceilings
+- `reflow.py` — re-break a message box's lines to fit, without losing text
+- `applyvi.py` — write the workbook back into the scripts, addressed by id
+- `applyui.py` — the same for the `ui` rows, rebuilding the SYSTEM databases
+- `checksheet.py` / `applystory.py` / `portjp2us.py` — the older sheet-driven
+  path, kept for sheets with no `EN ID` column
 
 ## Conventions
 

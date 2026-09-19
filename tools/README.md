@@ -149,16 +149,70 @@ dịch, 851 lệch markup, 253 thiếu `EN ID`.
 
 `--max-bytes 84` dựng bản dè dặt, bỏ 1.305 câu vượt trần (xem mục dưới).
 
+#### `--merge` — nạp bản dịch có sẵn vào workbook
+
+```bash
+python mksheet.py --merge "Shuuen_JP_STORY.xlsx" --out work/virche_vi.xlsx
+```
+
+Nhận bảng dịch đã có **cột `EN ID`** do chính tool này sinh ra, đổ cột Tiếng
+Việt vào đúng dòng và thêm hai cột `vi_bytes` + `canh bao`. Ghép **theo ID**
+(offset byte chính xác của build đang bung), không cần dò nội dung như
+`applystory.py`.
+
+Cột `EN ID` phải tìm **theo tiêu đề**, không tìm theo nội dung được: ID neo theo
+bản Nhật (`1___48EFC_text`) và ID bản Anh (`4150___48F08_text`) cùng một dạng,
+nên quét nội dung sẽ bám vào cột đầu tiên — tức cột tiếng Nhật — rồi không khớp
+được dòng nào.
+
+Các cờ trong cột `canh bao`:
+
+| cờ | nghĩa |
+|---|---|
+| `khong vua block` | câu dịch cần nhiều byte hơn block gốc |
+| `qua dai NNB` | dài hơn 84 byte |
+| `markup lech` | `#NAME[1]` / `#Color[]` / `#n` khác với block bị ghi đè |
+| `cau Nhat lech` | câu Nhật dùng để dịch không nằm ở vị trí đó bên bản Nhật |
+| `chua dich` | chưa có bản dịch |
+
+So khớp markup dùng đúng token `#NAME[k]`, `#Color[k]`, `#n`, thay vì regex tham
+kiểu `#[A-Za-z]+` (nó nuốt luôn chữ đứng sau `#n` nên `#nto` và `#nand` thành
+hai lệnh khác nhau). Trên dữ liệu thật hai cách chỉ lệch nhau **1 dòng mỗi
+chiều** — dùng token chính xác vì đúng nguyên tắc, không phải vì nó sửa được
+nhiều.
+
+Khi so cột tiếng Nhật, cả hai bên phải chuẩn hóa dấu câu trước: bảng đi qua CSV
+về thì `……` thành `...`, mất `――` và `」`, nếu so thô sẽ có **3.058 dòng lành bị
+báo lệch**.
+
 ### Bộ tool kịch bản đi kèm
 
 - `stcm2l.py` — đọc / dựng lại `.DAT` (STCM2L); chạy trực tiếp để tự kiểm tra file
 - `checksheet.py` — đối chiếu bảng dịch với `.DAT`, xem bảng có đúng build không
-- `applyen.py` — ghi bản dịch vào bản ENG theo `EN ID` (**ưu tiên dùng**)
+- `applyvi.py` — ghi workbook của `mksheet.py` vào `.DAT` theo ID (**ưu tiên dùng**)
+- `applyen.py` — ghi thẳng từ bảng neo bản Nhật, theo cột `EN ID`
 - `applystory.py` — ghi bản dịch, khớp theo nội dung, khi bảng không có `EN ID`
 - `portjp2us.py` — chuyển bản dịch neo theo bản Nhật sang build khác
 
-Quy trình: `mksheet.py` → dịch cột C → `checksheet.py` → `applyen.py` →
+Quy trình: `mksheet.py` → dịch cột C → `mksheet.py --merge` → `applyvi.py` →
 `cpk.py repack`.
+
+### `applyvi.py` — ghi bản dịch theo ID
+
+```bash
+python applyvi.py work/virche_vi.xlsx STORY.cpk work/story-vi-en
+python applyvi.py work/virche_vi.xlsx STORY.cpk out --dry-run
+python applyvi.py work/virche_vi.xlsx STORY.cpk out --max-bytes 84 --report qua_dai.csv
+```
+
+Không dò nội dung: ID trong workbook đã là offset byte chính xác của block nên
+mỗi dòng tự chỉ đúng đích — 28.141 dòng "ambiguous" khi khớp theo nội dung thì ở
+đây là chính xác. Offset vẫn kiểm lại: block phải đang chứa đúng câu ở cột
+nguồn, lệch thì bỏ qua và đếm.
+
+Mỗi file sau khi dựng lại phải qua kiểm tra mới được ghi ra đĩa — walk dừng đúng
+`EXPORT_DATA`, không byte khác 0 bị bỏ, không con trỏ lạc, **và đồ thị gọi hàm y
+nguyên**. Trượt thì không ghi.
 
 ### Trần 84 byte cho một block
 
@@ -170,11 +224,131 @@ Chưa chứng minh được. Tiếng Việt có dấu tốn 2 byte mỗi chữ n
 trần; `--max-bytes 84` bỏ số đó ra, mặc định thì ghi hết. Danh sách câu quá dài
 xuất bằng `--report` để người dịch rút gọn.
 
-> **Đổi kích thước block KHÔNG làm treo game.** Kết luận cũ ghi trong
-> `portjp2us.py` là sai: các lần treo trước đó là do ghi **đúng câu vào sai
-> chỗ** (dò theo nội dung rồi dóng lệch một ô), không phải do block dài ra.
-> `applyen.py` ghi 94.497 dòng nguyên độ dài, `check()` / `check_pointers()`
-> sạch trên cả 54 file.
+### Con trỏ gọi hàm — vì sao block dài ra từng làm treo game
+
+`portjp2us.py` ghi nhận: thay chuỗi **cùng kích thước** thì chạy, hơn hoặc kém
+một byte là treo, còn sửa đúng lệnh cuối cùng (phía sau không còn gì để dời) thì
+lại chạy. Triệu chứng đó là dấu hiệu kinh điển của **con trỏ chết**, và đúng là
+vậy:
+
+> Khi `global_call == 1`, trường thứ hai của lệnh **không phải opcode** mà là
+> **địa chỉ của lệnh cần gọi**. `stcm2l.build()` trước đây chép thẳng giá trị đó
+> sang file mới mà không dời.
+
+Bản tiếng Anh có **350.273/718.773** lệnh là lời gọi, 100% trỏ đúng đầu một lệnh
+khác. Cho các block text của `101.DAT` dài ra rồi dựng lại kiểu cũ: **6.539**
+con trỏ gọi rơi vào giữa lệnh khác; tính trên 6 file đầu là **90,7%**.
+
+**Kết luận cũ ở đây — "đổi kích thước block không làm treo game, vì `check()` và
+`check_pointers()` sạch" — dựa trên bằng chứng không đủ.** Hai hàm đó không hề
+đọc trường opcode. File dựng kiểu cũ vẫn cho `walk lands = True`, `byte khác 0 =
+0`, `check_pointers() = 0` trong khi 6.539 lời gọi đã hỏng. Mọi bản build tạo
+trước khi sửa `stcm2l.build()` đều dính lỗi này.
+
+`stcm2l.build()` giờ dời cả trường đó. `Script.call_targets()` biểu diễn đồ thị
+gọi bằng **chỉ số lệnh** nên so được trước/sau khi dựng lại, và
+`Script.check_calls()` đếm con trỏ gọi không trúng đầu lệnh. Round-trip không
+sửa gì vẫn `BIT-IDENTICAL`.
+
+Sau khi sửa thì block dài ra **thật sự an toàn về mặt cấu trúc**: 54 file, +1,13
+MB, đồ thị gọi y nguyên, mọi kiểm tra sạch. Trần 84 byte ở trên là chuyện khác —
+đó là bộ đệm dòng của engine, vẫn chưa chứng minh.
+
+### `applyui.py` — ghi dòng giao diện vào SYSTEM.cpk
+
+```bash
+python tools/applyui.py work/glossary.xlsx work/out
+python tools/applyui.py work/virche_vi.xlsx work/out --dry-run
+python tools/applyui.py work/glossary.xlsx work/out --cpk dist/SYSTEM_text.cpk
+```
+
+Cặp đôi của `applyvi.py` cho nửa text còn lại. `applyvi.py` vá block `.DAT`
+trong STORY.cpk và **cố tình** không nhận dòng `ui`; tool này lấy đúng những
+dòng đó và dựng lại file `.gbin` / `.gstr` sinh ra chúng.
+
+Ghi ra **thư mục**, tức bước 3 của `build.py` — đúng chỗ
+`translate_glossary.py` đang đứng, và đúng thư mục `cpk.py repack` góm vào CPK
+cùng với font. `--cpk` chỉ là lối tắt để xem thử một màn, không cần build lại
+cả bản.
+
+`--src` mặc định là `SYSTEM.cpk` chứ không phải `work/stock`, vì stock chỉ có
+4 file ghi trong `fonts.json` — riêng màn Glossary đã đụng `strGame.gstr`
+không nằm trong đó.
+
+**Địa chỉ theo ID, và ID được kiểm.** `translate_glossary.py` dò theo nội dung —
+tìm chuỗi tiếng Anh ở bất kỳ đâu trong pool. Đó chính là cách `CLAUDE.md` cảnh
+báo. ID của mksheet là một địa chỉ (`bản ghi.cột___offset_role`) nên một dòng
+chỉ thẳng ô của nó. Cả ba phần đều phải đúng trước khi ghi: ô phải tồn tại,
+phải còn trỏ đúng offset đó, và chuỗi ở đó phải là câu nguồn trong sheet.
+
+**Một dòng sửa mọi ô trỏ vào chuỗi đó.** `gbnl.build()` khóa theo nội dung chứ
+không theo ô. Vì vậy hai dòng cùng câu nguồn mà khác bản dịch thì **bị từ
+chối** — cái nào thắng cũng là lặng lẽ quyết thay cái kia.
+
+**Dài bao nhiêu cũng được** — pool được dựng lại, không có trần như block
+`.DAT`. Cái file không sống nổi là mất khối schema, nên kết quả được **đọc lại
+và so từng ô** trước khi ghi xuống đĩa (`verify()`): shape không đổi, khối schema
+giống từng byte, và mọi ô phải đọc ra hoặc bản dịch hoặc đúng cái cũ.
+
+Đo thử trên một sheet Glossary điền tay: 4 dòng được áp, đúng **5 ô** đổi trong
+`dbDictionary` (một mô tả + hai tên, mỗi tên ăn cả cột 8 lẫn 16), 1 ô trong
+`strSystem`, khối schema nguyên vẹn. Dòng thêm `#NAME[1]` bị chặn vì lệch
+markup; dòng dịch trùng bản gốc bị bỏ qua. Đóng gói lại rồi so toàn bộ CPK:
+54/54 file, đúng 2 file khác — hai file vừa sửa.
+
+### `linebreak.py` — `#n` ↔ xuống hàng thật
+
+Trong game, ngắt dòng là `#n`. Trong ô Excel thì nó thành một cục chữ dài,
+người dịch muốn ngắt lại phải đếm ký tự không nhìn thấy. Nên lúc ghi sheet,
+`to_sheet()` đổi `#n` thành xuống hàng thật; lúc đọc sheet, `to_game()` đổi
+ngược lại. `mksheet.py`, `glossary.py`, `checksheet.py`, `applyvi.py`,
+`applyen.py` và `reflow.py` đều đã nối sẵn.
+
+Đổi qua đổi lại **không mất gì**, và điều đó được **đếm trước khi dùng**:
+
+- Không chuỗi nào trong game chứa ký tự điều khiển thô — quét đủ **97.110**
+  dòng `mksheet.py` rút ra, đếm được **0**. Nên xuống hàng trong ô chỉ có thể
+  do `to_sheet()` hoặc người dịch tạo ra, đổi ngược không thể đẻ thêm `#n`.
+- `#n` là lệnh duy nhất viết bằng `n` thường. Cả bản game chỉ có `#NAME[1]`,
+  `#Color[0]`, `#Color[8]`, `#PosX[%d]`, `#ERROR` và `#n`.
+
+**Khoảng trắng cạnh chỗ ngắt giữ nguyên** — 54 dòng gốc có dấu cách trước
+`#n`, 4 dòng có sau. Cắt cho gọn là sửa nội dung, nên không cắt. Chỗ gọi
+`.strip()` cả ô **trước** khi `to_game()`, để cái xuống hàng thừa ở cuối ô
+(Excel không hiện) không biến thành `#n` ở cuối câu.
+
+Cột `bytes` đếm **trước** khi đổi: ngắt dòng tốn 2 byte trong game, 1 trong ô.
+
+Sheet làm từ trước vẫn chạy y nguyên — trong đó `#n` là chữ thật, `to_game()`
+không đụng tới. Kiểm trên `work/virche_vi.xlsx`: 0/192.711 ô bị đổi.
+
+### `glossary.py` — bảng dịch riêng màn Glossary
+
+```bash
+python tools/glossary.py --out work/glossary.xlsx
+```
+
+Màn Glossary lấy chữ từ ba file: `dbDictionary.gbin` (98 mục, tên + mô tả),
+`strSystem.gstr` (thanh tab kana, câu báo tab rỗng, hai dòng gợi ý ở menu) và
+`strGame.gstr` (câu báo mở khóa hết). `mksheet.py --no-story` đã rút
+`dbDictionary` đủ, nhưng không lọc được hai file kia — riêng `strSystem` có
+114 dòng của mọi màn khác. Tool này liệt kê tay 5 khóa trong `UI_KEYS`.
+
+Cột và ID lấy thẳng từ `mksheet.py` (import `Workbook`, `db_rows`,
+`db_pairing`, `jp_db_map`) chứ không chép lại, vì `checksheet.rows_of()` đọc
+cột nguồn và cột dịch **theo vị trí**.
+
+**196 dòng cho 294 ô là đúng.** `dbDictionary` có ba cột chuỗi: tên (8), cách
+đọc (16), mô tả (24). Bản tiếng Anh để cột 8 và 16 **trỏ chung một chuỗi** ở
+cả 98 bản ghi — bản Nhật để kana ở cột 16 cho việc sắp xếp, tiếng Anh không có
+gì để bỏ vào. `gbnl.build()` khóa theo nội dung nên một dòng sửa cả hai ô.
+
+**Thanh tab vẫn là tiếng Nhật.** `IDS_DICTIONARY_TAB` giống hệt nhau ở cả hai
+bản: mười mốc `#PosX[%d]` chứa あ-わ. `u16` ở offset 2 của bản ghi là hàng kana
+của **cách đọc tiếng Nhật** — khớp 98/98 — nên dịch chuỗi không đổi được cách
+gom nhóm, đó là việc ghi lại cột đó, khác việc dịch.
+
+Ghi bảng này ngược vào game bằng `applyui.py`.
 
 ## Tool phụ
 
