@@ -14,9 +14,15 @@ FILE LAYOUT
 
 INSTRUCTION
     u32 global_call
-    u32 opcode
+    u32 opcode              global_call 0: a real opcode (0, 3, 6, 500, ...)
+                            global_call 1: the ADDRESS of the instruction to call
     u32 param_count
     u32 length              total size of the instruction, params and data blocks
+
+    The second field is two different things depending on the first, and that
+    matters when rebuilding: 350,273 of the 718,773 instructions in the English
+    build are calls, and every one of their targets has to be rebased when
+    instructions move. See build().
     param[param_count]      12 bytes each: (value, tag, tag)
     data blocks             fill the rest of `length`, zero-padded between blocks
 
@@ -36,6 +42,19 @@ DATA BLOCK
     Blocks are recognised by the invariant `one == 1 and length == nwords * 4`,
     which lets the walker skip the zero padding that sits between them. Do not
     additionally require `flag == 0`: a small number of real blocks carry 1.
+
+PARAMETER
+    u32 value       an immediate, or the address of one of the instruction's
+                    own data blocks
+    u32 jump        the address of another INSTRUCTION, for the two branch
+                    opcodes; otherwise an ordinary tag
+    u32 tag         never an address
+
+    Opcode 3 is a conditional branch and keeps its target in parameter 3;
+    opcode 6 is a goto and keeps it in parameter 0. Across the English build all
+    53,928 and 18,129 of them land exactly on an instruction start. An earlier
+    note here claimed the format had no jump pointers between instructions; that
+    was drawn from classifying only the first word of each parameter.
 
 WHY NOT SCAN FOR POINTERS
     Trying to spot pointers by their trailing 0x40000000 tag does not work -
@@ -111,6 +130,9 @@ class Script:
         if self.code_start < 0 or self.code_end < 0:
             raise ValueError('missing CODE_START_ / EXPORT_DATA label')
         self.code_start += len(CODE_LABEL) + 1     # label is NUL-padded to 12
+        # COLLECTION_LINK, whose second word is the total file size; build()
+        # has to rewrite that when the file changes length.
+        self._coll_off = struct.unpack_from('<I', data, 0x2C)[0]
         self.instructions = []
         self.padding = 0                            # zero bytes between blocks
         self.tail = 0                               # <16 bytes left at instruction end
@@ -183,8 +205,8 @@ class Script:
           - the header offsets at 0x20 (EXPORT_DATA) and 0x2C (COLLECTION_LINK)
 
         Parameters pointing into GLOBAL_DATA need no fixing: that section sits
-        before the code, so its offsets never shift. There are no jump pointers
-        between instructions - verified by classifying every parameter.
+        before the code, so its offsets never shift. Their second word IS a jump
+        target for opcodes 3 and 6, and is rebased with everything else.
         """
         repl = repl or {}
         d = self.raw
@@ -212,18 +234,37 @@ class Script:
                                     len(payload)) + payload
             body += ins.tail
             new_len = INS_HEADER + len(ins.params) * PARAM_SIZE + len(body)
-
-            params = bytearray()
-            for v, t1, t2 in ins.params:
-                params += struct.pack('<3I', blk_at.get(v, v), t1, t2)
-
-            pieces.append(struct.pack('<4I', ins.global_call, ins.opcode,
-                                      len(ins.params), new_len) + bytes(params) + bytes(body))
+            pieces.append((ins, blk_at, bytes(body), new_len))
             cur += new_len
 
+        # pass 1b: emit, now that `moved` covers every instruction. Nothing that
+        # points at an instruction can be written in the loop above: a forward
+        # jump or call names an instruction whose new address is not known yet,
+        # so it would silently keep its old one. That is what left 594 of
+        # 100.DAT's 609 jumps stale - only the backward ones happened to work.
         out = bytearray(d[:self.code_start])
-        for piece in pieces:
-            out += piece
+        for ins, blk_at, body, new_len in pieces:
+            params = bytearray()
+            for v, t1, t2 in ins.params:
+                # The SECOND word of a parameter is a jump target, not a tag.
+                # Opcode 3 (conditional branch) carries it in parameter 3 and
+                # opcode 6 (goto) in parameter 0 - 72,057 of them in the English
+                # build, and in both cases 100% land on an instruction start.
+                # Leaving them stale does not crash the engine outright; the
+                # script jumps into the middle of an instruction and quietly
+                # stops drawing, which is the black screen after a rebuild that
+                # moved anything. The third word never points anywhere.
+                params += struct.pack('<3I', blk_at.get(v, v), moved.get(t1, t1), t2)
+            params = bytes(params)
+            # When global_call is 1 the opcode is not an opcode at all: it is the
+            # address of another instruction, the call target. All 350,273 of
+            # them in the English build land exactly on an instruction start.
+            # Leaving it unrebased is what makes a grown file crash while the
+            # same file rebuilt at identical sizes runs - every call in it points
+            # a few bytes into the wrong instruction as soon as anything shifts.
+            opcode = moved[ins.opcode] if ins.global_call == 1 else ins.opcode
+            out += struct.pack('<4I', ins.global_call, opcode,
+                               len(ins.params), new_len) + params + body
         new_code_end = len(out)
 
         # pass 2: the trailer, with its pointers into the code section rebased
@@ -240,7 +281,53 @@ class Script:
             v = struct.unpack_from('<I', out, hoff)[0]
             if v >= self.code_end:
                 struct.pack_into('<I', out, hoff, v + shift)
+
+        # pass 4: COLLECTION_LINK carries the total file size four bytes in, and
+        # it is not a pointer to anything, so neither the trailer scan nor the
+        # header fixups touch it. Left stale it still describes the file as it
+        # was before the text grew, which is what crashed the English build the
+        # moment a script was loaded, while a same-size rebuild ran fine. True
+        # of all 117 scripts in both builds; written only when it really is the
+        # old size, so a file that uses the field differently is left alone.
+        coll = struct.unpack_from('<I', out, 0x2C)[0]
+        if coll + 8 <= len(out) and \
+                struct.unpack_from('<I', d, self._coll_off + 4)[0] == len(d):
+            struct.pack_into('<I', out, coll + 4, len(out))
         return bytes(out)
+
+    def call_targets(self):
+        """Instruction index -> index of the instruction it calls, for gc==1.
+
+        Expressed in indices rather than offsets so it can be compared across a
+        rebuild, where every offset moves but the call graph must not.
+        """
+        idx = {ins.off: k for k, ins in enumerate(self.instructions)}
+        return {k: idx[ins.opcode] for k, ins in enumerate(self.instructions)
+                if ins.global_call == 1 and ins.opcode in idx}
+
+    def jump_targets(self):
+        """(instruction index, parameter index) -> index of the instruction it
+        branches to, for the opcode 3 / opcode 6 jumps.
+
+        Like call_targets(), in indices so that it can be compared across a
+        rebuild. A jump left behind does not crash the engine - the script runs
+        off into the middle of an instruction and stops drawing - so nothing
+        else notices it going wrong.
+        """
+        idx = {ins.off: k for k, ins in enumerate(self.instructions)}
+        return {(k, pi): idx[t1]
+                for k, ins in enumerate(self.instructions)
+                for pi, (_v, t1, _t2) in enumerate(ins.params) if t1 in idx}
+
+    def check_calls(self):
+        """Count gc==1 instructions whose call target is not an instruction start.
+
+        Anything but zero means a rebuild moved instructions without rebasing
+        the calls, and the engine will jump into the middle of one.
+        """
+        starts = {ins.off for ins in self.instructions}
+        return sum(1 for ins in self.instructions
+                   if ins.global_call == 1 and ins.opcode not in starts)
 
     def check_pointers(self):
         """Count parameters that should address a data block but do not.
