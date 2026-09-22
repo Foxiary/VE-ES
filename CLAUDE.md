@@ -418,6 +418,30 @@ elsewhere in this file: a cell taller than the template (the engine scales the
 glyph by `88/cell`), and an edge that has not been softened before the 4bpp
 quantise.
 
+**A line the English build "does not have" is a slot it left empty.** The two
+builds run the same script — 50 of the 54 story files hold identical
+instructions and the other four differ by one to three, all on the Japanese
+side. Where English needed fewer lines in a box the localiser emptied the text
+block instead of deleting the instruction: 82,685 English `text` instructions
+against 82,692 Japanese, but 70,787 holding text against 77,655. The 5,989 in
+between are live instructions with an empty block, and every one of them sits in
+a box that already draws text, so filling one adds a line to a box already on
+screen. `mksheet.cell_text()` drops them as "blank line used to pad a message
+box", which is why a JP-anchored translation looks like it has 7,000 lines the
+English build has nowhere to put. It has nowhere to put them only because they
+carry no id; `story_rows(..., filled)` emits the ones Japanese fills, and
+`relinkjp.py` re-addresses the sheet onto them.
+
+**A `EN ID` column zipped over non-blank rows drifts, and the drift is silent.**
+The incoming sheet's column was built by pairing its Japanese lines with the
+English lines that hold text, so every empty slot it steps over shifts the rest
+of the run by one until something resynchronises it — 557 rows one slot off,
+10,277 with no id at all. Nothing downstream can see this: the ids are valid,
+they address real blocks, and `applyvi.py` writes them. What it looks like from
+outside is 109 chapter titles carrying `...` instead of a title. Re-derive the
+address from the two builds (`mksheet.py --merge --relink`) rather than trusting
+the column.
+
 **A chapter title is `<japanese key>@<display text>`.** The key is what the
 flowchart looks the scene up by; losing it corrupts the scene table rather than
 just the text. Every translated title in the imported sheet had lost it, and
@@ -494,7 +518,10 @@ The text pipeline, in the order it runs:
 - `stcm2l.py` — read/rebuild `.DAT`; `check_calls()` and `jump_targets()` are
   the checks that matter after a rebuild
 - `mksheet.py` — extract every translatable string to `.xlsx`; `--merge` folds
-  in an existing translation and flags what needs review
+  in an existing translation and flags what needs review, `--relink` works out
+  where its rows belong instead of trusting its `EN ID` column
+- `relinkjp.py` — what `--relink` runs: aligns a JP-anchored sheet against both
+  builds and re-addresses it
 - `glossary.py` — the same thing for the Glossary screen alone
 - `linebreak.py` — `#n` on the way out of a sheet, a real newline on the way in
 - `textwidth.py` — how wide a line actually draws, and the measured ceilings

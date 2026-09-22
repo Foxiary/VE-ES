@@ -7,7 +7,7 @@ Hai nhánh tách rời nhau, không phụ thuộc nhau:
 
 | | nội dung | file game | tool ghi |
 |---|---|---|---|
-| **Thoại** | 96.132 dòng trong 54 kịch bản | `STORY.cpk` | `applyvi.py` |
+| **Thoại** | 103.382 dòng trong 54 kịch bản | `STORY.cpk` | `applyvi.py` |
 | **Giao diện** | menu, Options, từ điển, tên chương | `SYSTEM.cpk` | `applyui.py` |
 | **File thực thi** | 12 câu trích ở màn tiêu đề | `exefs/main` | `applyexe.py` |
 
@@ -34,10 +34,17 @@ Cột: `ID | Nguồn (EN) | Tiếng Việt | Tiếng Nhật | Ghi chú | kind | 
 Khi nhóm dịch gửi bảng mới (bảng neo theo bản Nhật, có cột `EN ID`):
 
 ```bash
-python tools/mksheet.py --merge "Shuuen_JP_STORY.xlsx" --out work/virche_vi.xlsx
+python tools/mksheet.py --merge "Shuuen_JP_STORY (8).xlsx" --relink --out work/virche_vi.xlsx
 ```
 
-Ghép **theo `EN ID`**, không dò nội dung. Cột `canh bao` đánh dấu dòng cần soát:
+**Luôn kèm `--relink`.** Cột `EN ID` bảng gửi về bước qua mọi ô mà bản Anh để
+trống, nên mỗi lần bước qua là cả đoạn sau lệch một ô: 557 dòng trỏ sai chỗ và
+10.277 dòng không có địa chỉ nào — hơn 7.000 trong số đó đã dịch xong. `--relink`
+bỏ cột đó, khớp lại từ chính hai build (xem `tools/relinkjp.py`) và đưa tỉ lệ
+dòng có bản dịch từ 91,6% lên **98,5%** — `applyvi.py` ghi được 102.888/103.382
+dòng (99,5%). Không có cờ này thì ghép theo `EN ID` như cũ.
+
+Cột `canh bao` đánh dấu dòng cần soát:
 
 | cờ | nghĩa |
 |---|---|
@@ -46,6 +53,10 @@ Ghép **theo `EN ID`**, không dò nội dung. Cột `canh bao` đánh dấu dò
 | `markup lech` | `#NAME[1]` / `#Color[]` / `#n` khác block bị ghi đè |
 | `cau Nhat lech` | câu Nhật nguồn không nằm ở vị trí đó bên bản Nhật |
 | `chua dich` | chưa có bản dịch |
+
+Dòng có cột `Nguon (EN)` trống và `Ghi chu` ghi `o trong - ban Nhat co dong nay`
+là **ô tiếng Anh bỏ trống** — lệnh vẫn ở trong file, block rỗng. Đó là chỗ đặt
+dòng "thừa" của bản Nhật, không phải lỗi rút text.
 
 ### 2b. Ghép tiêu đề chương
 

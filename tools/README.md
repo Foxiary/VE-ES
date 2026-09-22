@@ -94,10 +94,11 @@ bảng theo đúng độ lệch đó — bản tiếng Anh lệch 0 ở 49 file 
 tiếng Nhật lệch 32. File nào dò ra độ lệch mà opcode `name` không tồn tại thì bị
 **bỏ qua và báo ra**, không đoán bừa.
 
-Cột `bytes` là độ dài câu gốc tính theo byte UTF-8. Bản gốc không có block nào
-quá **84 byte** và block 98 byte làm treo game, nên đây là hạn mức cho câu dịch —
-chữ Việt có dấu tốn 2 byte mỗi chữ. Hạn mức này chỉ áp cho sheet kịch bản; sheet
-`ui` đi qua `gbnl.py` nên dài bao nhiêu cũng được.
+Cột `bytes` là độ dài câu gốc tính theo byte UTF-8, **chỉ để tham khảo**. Không
+có trần byte: bản dò đã đẩy dòng 100, 150, 200, 300, 500 và 800 byte lên màn
+hình và game chạy hết. Thứ thật sự tràn là **bề rộng khi vẽ ra**, đo bằng
+`textwidth.py` — xem mục "Trần là bề rộng" bên dưới. Chữ Việt có dấu tốn 2 byte
+mỗi chữ nhưng vẽ ra vẫn là một chữ bề ngang bình thường, nên đếm byte càng sai.
 
 Cột string của `.gbin` / `.gstr` trộn lẫn text hiển thị với khóa nội bộ mà không
 có phép thử nội dung nào tách được (`YES` là text, `sure1` là cờ, nhìn giống
@@ -151,9 +152,15 @@ Tiêu đề cột B ghi "English" nhưng nội dung là tiếng Nhật — sai t
 Offset chỉ được tin **sau khi** nội dung block khớp đúng cột D; lệch thì bỏ
 dòng và đếm, không ghi liều. Markup (`#NAME`…) cũng phải khớp block bị đè.
 
-Kết quả trên bản `01009CF01BAC4000`: **94.497/102.809** dòng đã dịch được ghi
-(91,9%). Bỏ qua: 7.208 dòng chỉ có bên Nhật nên build ENG không có, 3.153 chưa
-dịch, 851 lệch markup, 253 thiếu `EN ID`.
+Kết quả trên bản `01009CF01BAC4000`, với `--relink` + `filltitles.py` (xem
+dưới): **102.888 / 103.382** dòng được ghi (99,5%). Bỏ qua: 151 chưa dịch, 322
+lệch markup, 21 khung không cân lệnh.
+
+Con số cũ ghi ở đây — 94.497 dòng, kèm "7.208 dòng chỉ có bên Nhật nên build ENG
+không có" — **sai ở vế giải thích**. Hai build chạy cùng một kịch bản: 50 trong
+54 file có y hệt số lệnh, bốn file còn lại chênh một tới ba lệnh. Chỗ tiếng Anh
+cần ít dòng hơn, người bản địa hóa **để trống block chứ không xóa lệnh**, nên ô
+vẫn còn đó — xem `relinkjp.py`.
 
 `--max-bytes 84` dựng bản dè dặt, bỏ 1.305 câu vượt trần (xem mục dưới).
 
@@ -178,10 +185,32 @@ Các cờ trong cột `canh bao`:
 | cờ | nghĩa |
 |---|---|
 | `khong vua block` | câu dịch cần nhiều byte hơn block gốc |
-| `qua dai NNB` | dài hơn 84 byte |
+| `qua dai NNB` | dài hơn 84 byte — **chỉ hiện khi không nạp được font để đo bề rộng**, và đo sai đại lượng |
 | `markup lech` | `#NAME[1]` / `#Color[]` / `#n` khác với block bị ghi đè |
 | `cau Nhat lech` | câu Nhật dùng để dịch không nằm ở vị trí đó bên bản Nhật |
 | `chua dich` | chưa có bản dịch |
+
+Dòng nào cột `Nguon (EN)` trống và cột `Ghi chu` ghi `o trong - ban Nhat co dong
+nay` là **ô tiếng Anh bỏ trống**: lệnh vẫn nằm trong file, chỉ là block rỗng.
+Đó là chỗ để đặt dòng thừa của bản Nhật, không phải lỗi rút text.
+
+#### `--relink` — dựng lại cột `EN ID` từ chính hai build
+
+```bash
+python mksheet.py --merge "Shuuen_JP_STORY (8).xlsx" --relink --out work/virche_vi.xlsx
+```
+
+Cột `EN ID` bảng dịch gửi về được zip lần lượt qua những dòng tiếng Anh **có
+chữ**, nên cứ bước qua một ô bỏ trống là cả đoạn sau lệch một ô cho tới khi có
+gì đó kéo lại. Đo trên bảng `(8)`: 95.019 dòng đúng, 557 dòng lệch ô, 10.277
+dòng không có `EN ID` nào — trong đó hơn 7.000 dòng đã dịch xong mà không tool
+nào đặt được.
+
+`--relink` bỏ qua cột đó và tự khớp lại (chi tiết ở `relinkjp.py`). Kết quả:
+91,6% → **98,5%** số dòng có bản dịch, và 109 tiêu đề chương rác — `...` thay
+vì tên chương, đúng cái `applyvi.py` vẫn phải từ chối — biến mất luôn vì chúng
+vốn là hậu quả của chính chỗ lệch này. Tiêu đề thật do `filltitles.py` ghép vào
+sau, như cũ.
 
 So khớp markup dùng đúng token `#NAME[k]`, `#Color[k]`, `#n`, thay vì regex tham
 kiểu `#[A-Za-z]+` (nó nuốt luôn chữ đứng sau `#n` nên `#nto` và `#nand` thành
@@ -189,9 +218,12 @@ hai lệnh khác nhau). Trên dữ liệu thật hai cách chỉ lệch nhau **1
 chiều** — dùng token chính xác vì đúng nguyên tắc, không phải vì nó sửa được
 nhiều.
 
-Khi so cột tiếng Nhật, cả hai bên phải chuẩn hóa dấu câu trước: bảng đi qua CSV
-về thì `……` thành `...`, mất `――` và `」`, nếu so thô sẽ có **3.058 dòng lành bị
-báo lệch**.
+Khi so cột tiếng Nhật, **bỏ hẳn dấu câu** ở cả hai bên chứ không quy đổi từng
+dấu: bảng đi qua CSV về thì `……` thành `...`, `――` cũng thành `...`, mất luôn
+ngoặc nhấn `【】` và dấu `。` cuối câu. Quy đổi từng dấu vẫn còn **15.699 dòng bị
+báo lệch, trong đó 15.420 dòng chỉ khác nhau ở dấu câu** — một cờ to như vậy thì
+không ai đọc. Bỏ hết dấu câu còn **278 dòng**, và đó đều là khác thật: tên nhân
+vật bảng ghi rõ còn build vẫn để `？？？`, hoặc một động từ đổi giữa hai bản.
 
 ### Bộ tool kịch bản đi kèm
 
@@ -201,9 +233,43 @@ báo lệch**.
 - `applyen.py` — ghi thẳng từ bảng neo bản Nhật, theo cột `EN ID`
 - `applystory.py` — ghi bản dịch, khớp theo nội dung, khi bảng không có `EN ID`
 - `portjp2us.py` — chuyển bản dịch neo theo bản Nhật sang build khác
+- `relinkjp.py` — dựng lại cột `EN ID` của bảng neo bản Nhật từ chính hai build
 
-Quy trình: `mksheet.py` → dịch cột C → `mksheet.py --merge` → `applyvi.py` →
-`cpk.py repack`.
+Quy trình: `mksheet.py` → dịch cột C → `mksheet.py --merge --relink` →
+`applyvi.py` → `cpk.py repack`.
+
+### `relinkjp.py` — đặt lại địa chỉ cho bảng neo bản Nhật
+
+```bash
+python relinkjp.py "Shuuen_JP_STORY (8).xlsx" --report work/relink_loose.csv
+```
+
+Chạy riêng thì chỉ báo cáo; muốn dùng thật thì gọi qua `mksheet.py --relink`.
+
+Điều làm được chuyện này là **hai build chung một kịch bản**: 50/54 file giống
+hệt nhau từng lệnh một, còn `302` và `402` chênh một lệnh, `605` hai, `601` ba —
+`portjp2us.align()` khép nốt bốn file đó. Nên lệnh thứ N bên này là lệnh thứ N
+bên kia, và mọi dòng tiếng Nhật đều đã có sẵn ô bên tiếng Anh.
+
+Chỗ tiếng Anh cần ít dòng hơn tiếng Nhật, block bị **để rỗng** chứ lệnh không bị
+xóa:
+
+| | lệnh `text` | trong đó có chữ |
+|---|---|---|
+| bản Anh | 82.685 | 70.787 |
+| bản Nhật | 82.692 | 77.655 |
+
+5.989 ô ở giữa là lệnh sống mang block rỗng, và **cả 5.989 ô đều nằm trong khung
+thoại đang hiện chữ** (5.935 khung, không khung nào rỗng hoàn toàn). Điền một ô
+là thêm một dòng vào khung vốn đã ở trên màn hình, không bao giờ làm hiện ra một
+khung trống.
+
+Khớp lại **theo nội dung**, không theo cột ID của bảng: offset trong ID đó chỉ
+giải được 43% số dòng với bản Nhật đang có, tức bảng được cắt từ một bản dump
+khác. Dùng `difflib` so cột tiếng Nhật với chính block của build Nhật rồi bê
+thẳng chỉ số lệnh sang bản Anh — 105.853 dòng đặt được, thêm 24 dòng được trả
+lại đúng ID cũ của nó khi hai dòng kề bên bảo đảm cho (`between()`). 85 dòng còn
+lại liệt kê ra `--report` chứ không đoán bừa, trong đó 27 dòng có bản dịch.
 
 ### `applyvi.py` — ghi bản dịch theo ID
 
@@ -222,15 +288,23 @@ Mỗi file sau khi dựng lại phải qua kiểm tra mới được ghi ra đĩ
 `EXPORT_DATA`, không byte khác 0 bị bỏ, không con trỏ lạc, **và đồ thị gọi hàm y
 nguyên**. Trượt thì không ghi.
 
-### Trần 84 byte cho một block
+### Trần là bề rộng, không phải byte
 
-Bản Nhật và bản Anh biên dịch độc lập, **cả hai đều không có block text nào quá
-84 byte** (bản Anh: 488.347 block, p99 = 46, max = 84). Trùng khít như vậy khó
-là ngẫu nhiên, nên nhiều khả năng đây là hằng số trong engine.
+Bản Nhật và bản Anh biên dịch độc lập mà **cả hai đều không có block text nào
+quá 84 byte** (bản Anh: 488.347 block, p99 = 46, max = 84). Trùng khít như vậy
+trông hệt như một hằng số trong engine, và tài liệu này từng ghi nó là hạn mức.
 
-Chưa chứng minh được. Tiếng Việt có dấu tốn 2 byte mỗi chữ nên 1.305 câu vượt
-trần; `--max-bytes 84` bỏ số đó ra, mặc định thì ghi hết. Danh sách câu quá dài
-xuất bằng `--report` để người dịch rút gọn.
+**Không phải.** Bản dò đặt dòng 100, 150, 200, 300, 500 và 800 byte vào phần mở
+đầu; game chạy qua hết. 84 byte chỉ là chỗ text tiếng Anh gốc dừng lại. Thứ nó
+làm là vẽ chữ tràn ra ngoài mép phải màn hình — khung tràn theo **bề rộng**.
+
+Đo bằng `textwidth.py`, cộng advance của từng glyph trong `.ffu`, so với khung
+hẹp nhất là backlog (2430 đơn vị) vì mọi câu thoại đều được chiếu lại ở đó. Phải
+đo bằng **font sẽ ship**, không phải font gốc — hai bộ lệch nhau tới 15% và sai
+cả thứ tự giữa các font.
+
+`--report` xuất danh sách câu **tràn khung**; `--fit-width` bỏ hẳn chúng.
+`--max-bytes` vẫn còn cho quy trình cũ nhưng đo sai đại lượng.
 
 ### Con trỏ gọi hàm — vì sao block dài ra từng làm treo game
 
@@ -259,8 +333,7 @@ gọi bằng **chỉ số lệnh** nên so được trước/sau khi dựng lạ
 sửa gì vẫn `BIT-IDENTICAL`.
 
 Sau khi sửa thì block dài ra **thật sự an toàn về mặt cấu trúc**: 54 file, +1,13
-MB, đồ thị gọi y nguyên, mọi kiểm tra sạch. Trần 84 byte ở trên là chuyện khác —
-đó là bộ đệm dòng của engine, vẫn chưa chứng minh.
+MB, đồ thị gọi y nguyên, mọi kiểm tra sạch.
 
 ### `exefs.py` — đọc chữ nằm ngoài romfs
 

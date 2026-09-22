@@ -158,6 +158,11 @@ NAME_OP = 74780                 # used to confirm a delta before trusting it
 # exception: its blocks alternate text and numbers, so all of them are examined.
 SINGLE_BLOCK = {'text', 'name', 'choice', 'title'}
 
+# Roles whose block may be empty and still be a line of a box the game draws -
+# the slots English emptied rather than deleted. See story_rows(). A speaker
+# name or a chapter title has no such thing: an empty one is simply not a row.
+EMPTIABLE = {'text', 'var'}
+
 # String columns worth translating, as (cell offset, role) per file. A column
 # absent here is internal - an asset id, a flag name or an IDS_ lookup key.
 DB_COLUMNS = {
@@ -236,11 +241,28 @@ def cell_text(block, allow_short):
     return t
 
 
-def story_rows(script, delta):
+def story_rows(script, delta, filled=None):
     """(id, source, role, (ins_i, blk_i), capacity) for every translatable block.
 
     `capacity` is the block's payload size as shipped, which is how many bytes a
     replacement can use without the block having to grow. See THE LINE BUDGET.
+
+    AN EMPTY LINE SLOT IS STILL A SLOT
+        Japanese splits a message box into more lines than English does, and
+        where English needed fewer the localiser did not delete the instruction
+        - they emptied its text block. The two builds run the same script: 50 of
+        the 54 story files hold identical instructions and the other four differ
+        by one to three, so there are 82,685 English text instructions against
+        82,692 Japanese ones while only 70,787 of the English ones hold text
+        against 77,655 Japanese. Those 5,989 empty blocks are the lines a
+        JP-anchored translation appears to have nowhere to put, and every one of
+        them sits in a box that already draws text - 5,935 boxes, none of them
+        blank throughout, so filling one adds a line to a box already on screen.
+
+        `filled` is the Japanese map, and a blank block is emitted only when
+        Japanese puts a line in it. That keeps the other 5,909 empty slots -
+        genuine blank lines in both builds - out of the sheet. The source cell
+        is empty, which is what `applyvi.py` then checks the block against.
     """
     roles = {op + delta: role for op, role in STORY_ROLES.items()}
     for i, ins in enumerate(script.instructions):
@@ -251,7 +273,12 @@ def story_rows(script, delta):
         for blk_i, b in enumerate(blocks):
             t = cell_text(b, allow_short=role in SINGLE_BLOCK)
             if t is None:
-                continue
+                # `text() is None` is a number or a control word, not an empty
+                # line, and no translation belongs in it.
+                if (role not in EMPTIABLE or not filled
+                        or (i, blk_i) not in filled or b.text() is None):
+                    continue
+                t = ''
             yield ('%d___%X_%s' % (i, b.data_off, role), t, role, (i, blk_i),
                    len(b.raw))
 
@@ -386,22 +413,30 @@ def jp_db_map(gj, cols, pairs):
 # ---------------------------------------------------------------- merging in
 
 ID_CELL_RX = re.compile(r'^\d+___[0-9A-F]+_(?:text|name|choice|title|var)$')
-DOTS_RX = re.compile(r'[.]{2,}')
-SPACE_RX = re.compile(r'[\s　]+')
+
+# Everything a Japanese line spells with punctuation rather than with a word.
+JP_PUNCT_RX = re.compile(
+    r'[\s　。、．，！？!?…‥・「」『』【】〔〕（）()［］\[\]〈〉《》―─‐—\-.]+')
 
 
 def normalise_jp(s):
-    """Fold a Japanese line down to what survives a CSV round-trip.
+    """A Japanese line folded down to the characters that carry its meaning.
 
-    A sheet that has been through CSV comes back with its punctuation mangled -
-    `……` flattened to `...`, `――` and the closing `」` dropped. Comparing raw
-    text would call 3,058 sound rows a mismatch, so both sides are folded before
-    they are compared and only real differences are flagged.
+    The sheet the translators send back has been through CSV and its punctuation
+    did not survive the trip: `……` arrives as `...`, `――` as `...` as well, the
+    【...】 emphasis brackets are gone outright and the `。` that closed a
+    sentence after an ellipsis went with them. Folding those case by case still
+    called 15,699 rows a mismatch, and 15,420 of them differed by punctuation
+    and nothing else - a flag that size is not read, so it may as well not
+    exist.
+
+    Punctuation is therefore dropped rather than matched. What is left is the
+    kana and the kanji, which is what "is this the same line" is asking, and 279
+    rows still differ under it: a name the sheet spells out where the build
+    still has ？？？, a verb that changed between two revisions of the script.
+    That is the number worth reading.
     """
-    s = unicodedata.normalize('NFKC', s or '')
-    for a, b in (('…', '...'), ('―', '-'), ('─', '-'), ('‐', '-')):
-        s = s.replace(a, b)
-    return SPACE_RX.sub('', DOTS_RX.sub('...', s))
+    return JP_PUNCT_RX.sub('', unicodedata.normalize('NFKC', s or ''))
 
 
 def load_merge(path):
@@ -571,7 +606,8 @@ class Workbook:
                         COLUMNS_TAIL + (COLUMNS_MERGE if with_merge else []))
 
     def add(self, name, rows):
-        """One worksheet; `rows` yields (id, source, japanese, kind, vi, warning)."""
+        """One worksheet; `rows` yields (id, source, japanese, kind, vi,
+        warning, note)."""
         ws = self.wb.create_sheet(name)
         for i, (_label, width) in enumerate(self.columns):
             ws.column_dimensions[chr(ord('A') + i)].width = width
@@ -583,7 +619,7 @@ class Workbook:
             head.append(c)
         ws.append(head)
         n = 0
-        for rid, src, jp, kind, vi, warn in rows:
+        for rid, src, jp, kind, vi, warn, note in rows:
             # Byte counts are the game's and are taken BEFORE #n becomes a
             # newline: the break costs two bytes on disk and one in a cell.
             src_bytes = len(src.encode('utf-8'))
@@ -592,7 +628,7 @@ class Workbook:
                      self._wrapped(ws, to_sheet(vi) or None)]
             if self.with_jp:
                 cells.append(self._wrapped(ws, to_sheet(jp)))
-            cells += [None, kind, src_bytes]
+            cells += [note, kind, src_bytes]
             if self.with_merge:
                 cells += [vi_bytes, warn or None]
             ws.append(cells)
@@ -721,6 +757,11 @@ def main():
     ap.add_argument('--merge',
                     help='a translation sheet carrying this tool\'s EN ID column; '
                          'its Vietnamese is filled in and flagged for review')
+    ap.add_argument('--relink', action='store_true',
+                    help='work out where the merge sheet\'s rows belong from '
+                         'the two builds instead of trusting its EN ID column, '
+                         'which steps over every line slot English left empty. '
+                         'See relinkjp.py; needs --jp-story')
     ap.add_argument('--sheet', action='append',
                     help='limit to these worksheets, script or database '
                          '(repeatable). It used to filter the scripts only, so '
@@ -733,8 +774,24 @@ def main():
     if not a.no_jp and not with_jp:
         print('!! khong thay ban tieng Nhat (%s) - bo cot tieng Nhat' % a.jp_story)
 
-    merge = load_merge(a.merge) if a.merge else {}
-    if a.merge:
+    merge = {}
+    if a.merge and a.relink:
+        # Imported here, not at the top: relinkjp reads this module, and the
+        # two would deadlock on each other at import time.
+        import relinkjp
+        if not jp_story:
+            print('!! --relink can ban tieng Nhat (%s)' % a.jp_story)
+            return 2
+        merge, rst, loose = relinkjp.tables(
+            relinkjp.read_workbook(a.merge), a.story, a.jp_story)
+        print('ban dich: %s sheet, %s dong - giu %s EN ID, sua %s, them %s, '
+              'theo bang %s, bo %s (%s dong co ban dich)' %
+              (len(merge), format(rst['dong'], ','), format(rst['ok'], ','),
+               format(rst['lech'], ','), format(rst['moi'], ','),
+               format(rst['giu theo bang'], ','), format(len(loose), ','),
+               format(rst['mat ban dich'], ',')))
+    elif a.merge:
+        merge = load_merge(a.merge)
         print('ban dich: %s sheet, %s dong co EN ID' %
               (len(merge), format(sum(len(v) for v in merge.values()), ',')))
 
@@ -762,8 +819,12 @@ def main():
                                  widths, ceiling, role) if merge else []
             for code, _text in flags:
                 warned[code] += 1
+            # A slot English left empty reads in the sheet as a row with no
+            # source, which is otherwise what an extraction bug looks like. Say
+            # so in the note column rather than leaving it to be guessed at.
+            note = 'o trong - ban Nhat co dong nay' if src == '' else None
             out.append((rid, src, jp_mine, role, vi,
-                        ', '.join(t for _c, t in flags)))
+                        ', '.join(t for _c, t in flags), note))
         return out
 
     if not a.no_story:
@@ -781,17 +842,18 @@ def main():
             if delta is None:
                 skipped.append('%s: khong co thoai' % base)
                 continue
-            rows = list(story_rows(script, delta))
-            if not rows:
-                skipped.append('%s: khong co thoai' % base)
-                continue
-
+            # The Japanese map is read first because it decides which of the
+            # empty English slots are lines at all; see story_rows().
             jmap = {}
             if base in jp_story:
                 try:
                     jmap = jp_story_map(script, Script(jp_story[base]), delta)
                 except ValueError as e:
                     skipped.append('%s (JP): %s' % (base, e))
+            rows = list(story_rows(script, delta, jmap))
+            if not rows:
+                skipped.append('%s: khong co thoai' % base)
+                continue
             got = sum(1 for r in rows if r[3] in jmap)
             jp_filled += got
             jp_total += len(rows)

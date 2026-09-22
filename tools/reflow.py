@@ -290,8 +290,17 @@ def balance_colour(lines):
 
 # --------------------------------------------------------------------- boxes
 
-def boxes_of(script, delta, sheet):
-    """[[row id, ...]] - the real text slots of each message box, in order."""
+def boxes_of(script, delta, sheet, keep_blank=False):
+    """[[row id, ...]] - the real text slots of each message box, in order.
+
+    `keep_blank` also lists the slots English left EMPTY. Those are lines of the
+    box as much as any other - the localiser emptied the block rather than
+    deleting the instruction, and `mksheet.story_rows()` gives them a row
+    whenever Japanese has a line for them - but a caller that does not carry
+    those rows must leave them out, or every box holding one is read as missing
+    a translation. Off by default for that reason; `applyvi.py` turns it on and
+    then keeps only the slots its sheet actually names.
+    """
     roles = {op + delta: role for op, role in STORY_ROLES.items()}
     ins = script.instructions
     out, i = [], 0
@@ -303,7 +312,9 @@ def boxes_of(script, delta, sheet):
         while j < len(ins) and roles.get(ins[j].opcode) == 'text':
             if ins[j].blocks:
                 b = ins[j].blocks[0]
-                if cell_text(b, True) is not None:
+                # `text() is None` is a number, not an empty line.
+                if (cell_text(b, True) is not None
+                        or (keep_blank and b.text() is not None)):
                     rows.append('%d___%X_text' % (j, b.data_off))
             j += 1
         if rows:

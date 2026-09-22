@@ -252,6 +252,7 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
     repl, st = {}, collections.Counter()
     queue = []                  # rows that name a block holding their source
     info = {}                   # text rows only: id -> (vietnamese, english)
+    seen = set()                # every text row this sheet names, translated or not
 
     for r in rows:
         if not r or c_id >= len(r) or not r[c_id]:
@@ -263,6 +264,8 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
             continue
         st['rows'] += 1
         kind = m.group(2)
+        if kind == 'text':
+            seen.add(rid)
         # Stripped first, then converted: a trailing newline left in a cell
         # is invisible in Excel and would come back as a trailing #n.
         src = to_game(str(r[c_src]).strip()) if c_src < len(r) and r[c_src] else ''
@@ -292,6 +295,11 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
         if kind == 'text':
             info[rid] = (tgt, cur)
 
+    # A box is only as wide as the slots this sheet carries: one it does not
+    # name cannot be translated, so counting it would refuse the box for a
+    # missing translation that was never owed.
+    if boxes is not None:
+        boxes = [[rid for rid in box if rid in seen] for box in boxes]
     refused = box_verdicts(boxes, info)
     for rid, kind, src, tgt, off, blk, cur in queue:
         if kind == 'text':
@@ -318,10 +326,15 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
             st['rong hon khung backlog'] += 1
         if len(payload) > 84:
             st['dai hon 84B'] += 1
-        if over_px > 0 or len(payload) > 84:
-            if longrows is not None:
-                longrows.append((rid, len(payload), len(src),
-                                 widest_px, over_px, tgt))
+        # The report is the list of lines someone has to shorten, so only the
+        # width puts a row in it. Byte count is counted above and printed, but
+        # it is not a limit: a probe build drew lines of 100 to 800 bytes and
+        # the game ran through every one. Filing those here buried the rows
+        # that do overflow under 1,209 that do not - on the current sheet, ALL
+        # of them, since nothing overflows the backlog any more.
+        if over_px > 0 and longrows is not None:
+            longrows.append((rid, len(payload), len(src),
+                             widest_px, over_px, tgt))
         if max_bytes and len(payload) > max_bytes:
             st['bo vi qua dai'] += 1
             continue
@@ -478,7 +491,10 @@ def main():
         # readable opcode table there are none, and every text line falls back
         # to being judged on its own.
         delta = detect_delta(script)
-        boxes = None if delta is None else boxes_of(script, delta, n)
+        # Every slot of the box, including the ones English left empty; `plan`
+        # then drops whichever the sheet does not name. See boxes_of().
+        boxes = (None if delta is None
+                 else boxes_of(script, delta, n, keep_blank=True))
         if boxes is None:
             nodelta.append(n)
         mine = []
@@ -532,7 +548,7 @@ def main():
             w.writerow(['sheet', 'id', 'vi_bytes', 'en_bytes', 'vi_px',
                         'over_px', 'vietnamese'])
             w.writerows(longrows)
-        print('danh sach cau qua rong / qua dai -> %s (%s dong)'
+        print('danh sach cau qua rong -> %s (%s dong)'
               % (a.report, format(len(longrows), ',')))
     return 1 if broken else 0
 

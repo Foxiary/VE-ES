@@ -30,13 +30,14 @@ SAFETY
     relative to the line it replaces can leave the engine resolving a name with
     no name context, which crashes it - that is what broke 605.DAT before.
 
-    --max-bytes caps the written line length. No text block in either stock
-    build exceeds 84 bytes - the Japanese and English builds were compiled
-    independently and both stop at exactly 84 - which looks like an engine
-    constant rather than a coincidence. Vietnamese with diacritics spends two
-    bytes per accented letter, so 1,305 lines land above it. Left uncapped by
-    default because that ceiling is inferred, not proven; pass --max-bytes 84
-    to build the conservative version.
+    --max-bytes caps the written line length, and measures the wrong thing. No
+    text block in either stock build exceeds 84 bytes - the Japanese and English
+    builds were compiled independently and both stop at exactly 84 - which read
+    like an engine constant. It is not one: a probe build put lines of 100, 150,
+    200, 300, 500 and 800 bytes on screen and the game ran through all of them.
+    84 is only where stock English happened to stop. What overflows is the
+    rendered WIDTH, which `textwidth.py` measures and `applyvi.py` enforces;
+    this flag is kept for the older workflow and left off by default.
 """
 import argparse
 import collections
