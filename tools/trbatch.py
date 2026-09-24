@@ -207,8 +207,13 @@ def markup_ok(vi, sources):
 
 
 def cmd_import(a):
-    done = {}
+    # Keyed by (sheet, id): an id is an instruction index and a byte offset,
+    # unique within one script but not across them - 471 ids recur in two or
+    # more sheets, and keying on the id alone once wrote one script's lines
+    # into another. The sheet comes from the batch file name, <sheet>_<n>.
+    got = collections.defaultdict(dict)
     for path in sorted(glob.glob(os.path.join(a.done, '*.jsonl'))):
+        done = got[os.path.basename(path).rsplit('_', 1)[0]]
         for n, line in enumerate(open(path, encoding='utf-8'), 1):
             line = line.strip()
             if not line:
@@ -224,6 +229,7 @@ def cmd_import(a):
     st = collections.Counter()
     bad = []
     for s in sheets(wb):
+        done = got.get(s, {})
         rows = list(wb[s].iter_rows(min_row=2))
         # Group text rows into boxes: a run of text rows between other rows.
         box = []
