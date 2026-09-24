@@ -51,6 +51,13 @@ OPCODES ARE ADDRESSES, NOT CONSTANTS
     other 5; on the Japanese build it is 32 throughout. A file whose rebased
     name opcode does not exist is reported and skipped rather than guessed at.
 
+    The fan disc (Virche Evermore -EpiC:Lycoris-) is a different binary and its
+    table is NOT the main game's rebased: text sits 8956 above the main game's
+    but name 9244 above, so no single delta fits both. It carries its own table,
+    FD_STORY_ROLES, which again moves as one piece - delta 0 in 104 of its
+    scripts, 16 in 18, 32 in one. detect_table() tries both and keeps the one
+    whose name opcode the file actually uses.
+
 SHORT BLOCKS ARE NOT ALWAYS NUMBERS
     A data block of exactly 4 bytes is usually an integer, but `???` and `Man`
     are real speaker names that also fit in 4 bytes - dropping every 4-byte
@@ -126,6 +133,7 @@ MERGING AN EXISTING TRANSLATION
 """
 import argparse
 import collections
+import difflib
 import os
 import re
 import struct
@@ -154,6 +162,25 @@ STORY_ROLES = {
 TEXT_OP = 72948                 # the anchor the delta is measured against
 NAME_OP = 74780                 # used to confirm a delta before trusting it
 
+# The same roles in the fan disc, read off 1001.DAT. See OPCODES ARE ADDRESSES.
+FD_STORY_ROLES = {
+    81904: 'text',
+    84024: 'name',
+    88556: 'choice',
+    11312: 'title',
+    253912: 'var',
+    254832: 'var',
+    308408: 'var',
+    308952: 'var',
+}
+
+# name -> (roles, text anchor, name anchor). 'main' first: every tool that only
+# knows the main game goes through detect_delta(), which accepts 'main' alone.
+STORY_TABLES = {
+    'main': (STORY_ROLES, TEXT_OP, NAME_OP),
+    'fd': (FD_STORY_ROLES, 81904, 84024),
+}
+
 # Roles whose instruction holds exactly one text block, at index 0. `var` is the
 # exception: its blocks alternate text and numbers, so all of them are examined.
 SINGLE_BLOCK = {'text', 'name', 'choice', 'title'}
@@ -169,6 +196,10 @@ DB_COLUMNS = {
     'dbDictionary.gbin': [(8, 'ui'), (16, 'ui'), (24, 'ui')],
     'dbFlowchart.gbin': [(32, 'ui'), (40, 'title')],
     'dbLogFace.gbin': [(0, 'name')],     # speaker names in the backlog
+    # Fan disc only.
+    'dbSideStory.gbin': [(0, 'ui'), (48, 'ui')],     # side story title, blurb
+    'dbEmoDesespoir.gbin': [(0, 'ui')],              # ending names
+    'dbLibPersonal.gbin': [(8, 'ui')],               # profile section labels
     'strDebug.gstr': [(16, 'ui')],
     'strGame.gstr': [(16, 'ui')],
     'strKeyHelp.gstr': [(16, 'ui')],
@@ -204,8 +235,8 @@ COLUMNS_MERGE = [('vi_bytes', 9), ('canh bao', 26)]
 
 # --------------------------------------------------------------------- story
 
-def detect_delta(script):
-    """How far this file's opcode table sits from the table above, or None.
+def detect_table(script):
+    """(table name, delta) for the opcode table this file uses, or None.
 
     The text opcode is the one carrying the most prose - a run of characters
     with a space and a lowercase letter in it, which no asset id has.
@@ -219,12 +250,29 @@ def detect_delta(script):
             score[ins.opcode] += 1
     if not score:
         return None
-    delta = score.most_common(1)[0][0] - TEXT_OP
+    top = score.most_common(1)[0][0]
+    used = {i.opcode for i in script.instructions}
     # A delta recovered from one opcode is only believable if it also lands the
     # name opcode on something the file actually uses.
-    if not any(i.opcode == NAME_OP + delta for i in script.instructions):
-        return None
-    return delta
+    fits = [(name, top - text_op)
+            for name, (_roles, text_op, name_op) in STORY_TABLES.items()
+            if name_op + top - text_op in used]
+    return fits[0] if len(fits) == 1 else None
+
+
+def detect_delta(script):
+    """How far this file's opcode table sits from STORY_ROLES, or None.
+
+    None as well for a fan disc script, whose table is not STORY_ROLES; the
+    tools calling this know only the main game.
+    """
+    found = detect_table(script)
+    return found[1] if found and found[0] == 'main' else None
+
+
+def roles_at(delta, table='main'):
+    """{opcode: role} for a file whose `table` sits at `delta`."""
+    return {op + delta: role for op, role in STORY_TABLES[table][0].items()}
 
 
 def cell_text(block, allow_short):
@@ -241,7 +289,7 @@ def cell_text(block, allow_short):
     return t
 
 
-def story_rows(script, delta, filled=None):
+def story_rows(script, delta, filled=None, table='main'):
     """(id, source, role, (ins_i, blk_i), capacity) for every translatable block.
 
     `capacity` is the block's payload size as shipped, which is how many bytes a
@@ -264,7 +312,7 @@ def story_rows(script, delta, filled=None):
         genuine blank lines in both builds - out of the sheet. The source cell
         is empty, which is what `applyvi.py` then checks the block against.
     """
-    roles = {op + delta: role for op, role in STORY_ROLES.items()}
+    roles = roles_at(delta, table)
     for i, ins in enumerate(script.instructions):
         role = roles.get(ins.opcode)
         if role is None:
@@ -283,24 +331,57 @@ def story_rows(script, delta, filled=None):
                    len(b.raw))
 
 
-def jp_story_map(en, jp, en_delta):
+def role_align(en, jp, en_roles, jp_roles):
+    """Like `portjp2us.align`, on a signature that also carries the role.
+
+    (parameter count, block count) is enough where the builds differ by a few
+    instructions, but the fan disc's Japanese scripts often run ~2% longer than the
+    English ones, and over gaps that size difflib pairs a speaker name with a
+    text line of the same shape. Adding the role - and the opcode itself where
+    it is a constant rather than a call address - rules those pairs out, so
+    what stays unmatched is left empty rather than filled with the wrong line.
+    """
+    def sig(ins, roles):
+        role = roles.get(ins.opcode)
+        op = role or ('call' if ins.global_call else ins.opcode)
+        return (op, len(ins.params), len(ins.blocks))
+    sm = difflib.SequenceMatcher(a=[sig(i, en_roles) for i in en.instructions],
+                                 b=[sig(i, jp_roles) for i in jp.instructions],
+                                 autojunk=False)
+    out = {}
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == 'equal':
+            for k in range(i2 - i1):
+                out[i1 + k] = j1 + k
+    return out
+
+
+def jp_story_map(en, jp, en_delta, table='main'):
     """{(ins_i, blk_i): japanese text} for blocks that line up across builds.
 
     See "THE JAPANESE COLUMN IS STRUCTURAL" above. Returns {} when the Japanese
     opcode table cannot be located, which leaves the column empty instead of
     filling it from an unverified alignment.
     """
+    text_op = STORY_TABLES[table][1]
     amap = align(en, jp)
     landed = collections.Counter()
     for i, ins in enumerate(en.instructions):
-        if ins.opcode == TEXT_OP + en_delta and i in amap:
+        if ins.opcode == text_op + en_delta and i in amap:
             landed[jp.instructions[amap[i]].opcode] += 1
     if not landed:
         return {}
-    jp_delta = landed.most_common(1)[0][0] - TEXT_OP
+    jp_delta = landed.most_common(1)[0][0] - text_op
 
-    en_roles = {op + en_delta: r for op, r in STORY_ROLES.items()}
-    jp_roles = {op + jp_delta: r for op, r in STORY_ROLES.items()}
+    en_roles = roles_at(en_delta, table)
+    jp_roles = roles_at(jp_delta, table)
+    # Equal instruction counts are not proof of a one-to-one stream: the fan
+    # disc's 405.DAT has 4449 on both sides and still drifts, an insertion
+    # cancelled by a deletion further on. Keep `align`'s map only if every
+    # role-bearing instruction lands on the same role.
+    if any(jp_roles.get(jp.instructions[j].opcode) != en_roles[en.instructions[i].opcode]
+           for i, j in amap.items() if en.instructions[i].opcode in en_roles):
+        amap = role_align(en, jp, en_roles, jp_roles)
     out = {}
     for i, ins in enumerate(en.instructions):
         role = en_roles.get(ins.opcode)
@@ -315,7 +396,89 @@ def jp_story_map(en, jp, en_delta):
             t = cell_text(b, allow_short=role in SINGLE_BLOCK)
             if t is not None:
                 out[(i, blk_i)] = t
+
+    _rescue_boxes(en, jp, en_roles, jp_roles, amap, out)
     return out
+
+
+def _text_boxes(script, roles):
+    """[[instruction index, ...]] - runs of text instructions, as
+    `reflow.boxes_of` reads a message box: anything else between them ends it."""
+    out, cur = [], []
+    for k, ins in enumerate(script.instructions):
+        if roles.get(ins.opcode) == 'text':
+            cur.append(k)
+        elif cur:
+            out.append(cur)
+            cur = []
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _rescue_boxes(en, jp, en_roles, jp_roles, amap, out):
+    """Put the Japanese lines the instruction alignment dropped back in `out`.
+
+    Where a box runs to more lines in Japanese, English deleted the extra slots
+    instead of emptying them, and over the fan disc's larger gaps difflib drops
+    whole boxes. Measured there before this pass: 3,882 of 77,962 Japanese text
+    lines - 5% - reached no row, leaving translators half a sentence. Every one
+    of them opened a box with no aligned line before it.
+
+    Inside a box that has an aligned line, a stray line joins its neighbour: the
+    aligned line before it, or the first one after. A box with no aligned line at
+    all is paired, in order, with the English boxes holding no Japanese between
+    the same two aligned boxes, and only when both sides count the same number
+    of them; its lines are then spread over that box's rows. Nothing is ever
+    carried across a box boundary.
+    """
+    back = {j: i for i, j in amap.items()}
+    eboxes = _text_boxes(en, en_roles)
+    ebox_of = {k: n for n, b in enumerate(eboxes) for k in b}
+
+    def lines(script, box):
+        got = []
+        for k in box:
+            ins = script.instructions[k]
+            t = cell_text(ins.blocks[0], allow_short=True) if ins.blocks else None
+            if t is not None:
+                got.append((k, t))
+        return got
+
+    def pair(pending, lo, hi):
+        cands = [n for n in range(lo + 1, hi)
+                 if lines(en, eboxes[n])
+                 and not any((k, 0) in out for k in eboxes[n])]
+        if len(cands) != len(pending):
+            return
+        for jl, n in zip(pending, cands):
+            rows = [k for k, _t in lines(en, eboxes[n])]
+            for q, (_k, t) in enumerate(jl):
+                key = (rows[q * len(rows) // len(jl)], 0)
+                out[key] = out.get(key, '') + t
+
+    pending, last = [], -1
+    for jbox in _text_boxes(jp, jp_roles):
+        jl = lines(jp, jbox)
+        hits = [k for k, _t in jl if k in back and (back[k], 0) in out]
+        if not hits:
+            if jl:
+                pending.append(jl)
+            continue
+        pair(pending, last, ebox_of[back[hits[0]]])
+        pending, last = [], ebox_of[back[hits[-1]]]
+        target, lead = None, ''
+        for k, t in jl:
+            if k in back and (back[k], 0) in out:
+                target = (back[k], 0)
+                if lead:
+                    out[target] = lead + out[target]
+                    lead = ''
+            elif target is None:
+                lead += t
+            else:
+                out[target] += t
+    pair(pending, last, len(eboxes))
 
 
 # ------------------------------------------------------------------ database
@@ -838,19 +1001,21 @@ def main():
             except ValueError as e:
                 skipped.append('%s: %s' % (base, e))
                 continue
-            delta = detect_delta(script)
-            if delta is None:
+            found = detect_table(script)
+            if found is None:
                 skipped.append('%s: khong co thoai' % base)
                 continue
+            table, delta = found
             # The Japanese map is read first because it decides which of the
             # empty English slots are lines at all; see story_rows().
             jmap = {}
             if base in jp_story:
                 try:
-                    jmap = jp_story_map(script, Script(jp_story[base]), delta)
+                    jmap = jp_story_map(script, Script(jp_story[base]), delta,
+                                        table)
                 except ValueError as e:
                     skipped.append('%s (JP): %s' % (base, e))
-            rows = list(story_rows(script, delta, jmap))
+            rows = list(story_rows(script, delta, jmap, table))
             if not rows:
                 skipped.append('%s: khong co thoai' % base)
                 continue

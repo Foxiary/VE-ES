@@ -217,6 +217,36 @@ while the first pass is still laying instructions out, so emitting it there
 silently keeps the old address. Doing that fixed only the backward jumps — 15 of
 609 in `100.DAT` — and looked like it worked.
 
+**The fan disc (EpiC:Lycoris) has its own opcode table.** Roles sit at
+text 81904, name 84024, choice 88556, title 11312, var 253912 / 254832 /
+308408 / 308952 — not the main game's table rebased, since text and name moved
+by different amounts. Within the fan disc the table moves as one piece again
+(delta 0/16/32). `mksheet.detect_table()` picks the table; `detect_delta()`
+still answers for the main game only, so `applyvi`, `reflow`, `relinkjp` and
+`exportvar` skip fan disc scripts rather than misread them. Its chapter titles
+carry **no** `key@` prefix, and 27 of its 150 scripts (`0_init`, `2000`–`2130`,
+…) hold only flags.
+
+Its two builds are much less alike than the main game's: Japanese scripts run
+up to ~2% longer, and `405.DAT` has 4449 instructions on both sides and still
+drifts. `portjp2us.align()` trusts equal counts and pairs on (params, blocks),
+which put a name on a text line; `mksheet.jp_story_map()` now falls back to
+`role_align()` whenever the index map lands any role on a different role. That
+takes the Japanese column from 95.5% to 98.4%. The remaining ~1,500 are lines
+English added to a box, with no Japanese instruction at all.
+
+**Rows covered is not text covered.** At 98.4% of rows the column still lacked
+3,882 of 77,962 Japanese lines: where a box ran longer in Japanese, English had
+deleted the slot, and those lines reached no row, so a translator saw
+`「でもお前は……` without the rest of the sentence. `_rescue_boxes()` joins such
+a line to its neighbour within the box, and pairs a wholly unaligned Japanese
+box with the unfilled English box between the same two anchors; 239 lines are
+still lost. A box is a run of text instructions with nothing between them - a
+narrow rule ("stop at a speaker name") carried a narration line into the
+dialogue before it, since narration has no name row. `1444.DAT` is the
+reverse - a whole scene only the JP build ships, although the EN
+`dbEntryScript` lists it.
+
 **Growing a block is safe** once all three are rebased: 54 files, +1.13 MB, call
 graph and jump graph identical, verified in game. The older note in
 `portjp2us.py` that a size change crashes was describing these stale pointers,
