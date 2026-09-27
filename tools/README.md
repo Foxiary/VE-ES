@@ -234,6 +234,7 @@ vật bảng ghi rõ còn build vẫn để `？？？`, hoặc một động t�
 - `applystory.py` — ghi bản dịch, khớp theo nội dung, khi bảng không có `EN ID`
 - `portjp2us.py` — chuyển bản dịch neo theo bản Nhật sang build khác
 - `relinkjp.py` — dựng lại cột `EN ID` của bảng neo bản Nhật từ chính hai build
+- `chuadich.py` — dòng game còn hiện tiếng Anh, kèm vị trí chèn trong bảng dịch và cả khung thoại
 
 Quy trình: `mksheet.py` → dịch cột C → `mksheet.py --merge --relink` →
 `applyvi.py` → `cpk.py repack`.
@@ -270,6 +271,29 @@ khác. Dùng `difflib` so cột tiếng Nhật với chính block của build Nh
 thẳng chỉ số lệnh sang bản Anh — 105.853 dòng đặt được, thêm 24 dòng được trả
 lại đúng ID cũ của nó khi hai dòng kề bên bảo đảm cho (`between()`). 85 dòng còn
 lại liệt kê ra `--report` chứ không đoán bừa, trong đó 27 dòng có bản dịch.
+
+Bảng dịch theo **bản Nhật 1.0.0**, còn game (bản Anh) theo **1.0.1**, nên thứ tự
+câu không phải lúc nào cũng giống nhau. Vì vậy có bốn lượt, lượt trước được tin
+hơn: khớp theo thứ tự → `EN ID` của bảng khi hai hàng kề bên bảo đảm
+(`between()`) → khớp nội dung bất kể thứ tự cho đoạn 1.0.1 đã đảo
+(`reordered()`) → rót lại cả khung khi bản Anh xoá một dòng rồi dồn câu lên ô
+trống (`rescue_boxes()`). Đổi thứ tự hai lượt giữa từng làm sai 3 ô ở `206`.
+Mỗi lần sửa ở đây, so toàn bộ bảng trước/sau: lượt đúng chỉ đổi đúng những ô
+định sửa.
+
+Hàng không có ID ở cột A (nhóm dịch chèn tay) vẫn được đọc, với ID tạm
+`+<dòng Excel>`. Hàng ID `…_text10` là một dòng `var`. Khi hai hàng rơi vào cùng
+một ô, hàng trống không đè hàng đã dịch.
+
+### `chuadich.py` — dòng game còn hiện tiếng Anh
+
+```bash
+python chuadich.py "<bang dich>" work/virche_vi.xlsx work/chua_dich.xlsx
+```
+
+Liệt kê cả những dòng mà bảng không có hàng nào (ô bản Anh để trống, hoặc dòng
+chỉ có ở 1.0.1), kèm "chèn sau / trước dòng Excel" và ba cột "Ca khung". Dòng
+chỉ gồm `　#n` là dòng đệm, không liệt kê.
 
 ### `applyvi.py` — ghi bản dịch theo ID
 

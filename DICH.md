@@ -7,7 +7,7 @@ Hai nhánh tách rời nhau, không phụ thuộc nhau:
 
 | | nội dung | file game | tool ghi |
 |---|---|---|---|
-| **Thoại** | 103.382 dòng trong 54 kịch bản | `STORY.cpk` | `applyvi.py` |
+| **Thoại** | 103.329 dòng trong 54 kịch bản | `STORY.cpk` | `applyvi.py` |
 | **Giao diện** | menu, Options, từ điển, tên chương | `SYSTEM.cpk` | `applyui.py` |
 | **File thực thi** | 12 câu trích ở màn tiêu đề | `exefs/main` | `applyexe.py` |
 
@@ -41,8 +41,8 @@ python tools/mksheet.py --merge "Shuuen_JP_STORY (8).xlsx" --relink --out work/v
 trống, nên mỗi lần bước qua là cả đoạn sau lệch một ô: 557 dòng trỏ sai chỗ và
 10.277 dòng không có địa chỉ nào — hơn 7.000 trong số đó đã dịch xong. `--relink`
 bỏ cột đó, khớp lại từ chính hai build (xem `tools/relinkjp.py`) và đưa tỉ lệ
-dòng có bản dịch từ 91,6% lên **98,5%** — `applyvi.py` ghi được 102.888/103.382
-dòng (99,5%). Không có cờ này thì ghép theo `EN ID` như cũ.
+dòng có bản dịch từ 91,6% lên **98,5%**. Với bảng `(6)` ngày 28/09, `applyvi.py`
+ghi được **103.327/103.329** dòng — hai dòng còn lại là lệnh bị dời sai phiên bản. Không có cờ này thì ghép theo `EN ID` như cũ.
 
 Cột `canh bao` đánh dấu dòng cần soát:
 
@@ -57,6 +57,51 @@ Cột `canh bao` đánh dấu dòng cần soát:
 Dòng có cột `Nguon (EN)` trống và `Ghi chu` ghi `o trong - ban Nhat co dong nay`
 là **ô tiếng Anh bỏ trống** — lệnh vẫn ở trong file, block rỗng. Đó là chỗ đặt
 dòng "thừa" của bản Nhật, không phải lỗi rút text.
+
+### 2a. Bảng dịch theo bản Nhật 1.0.0, game là 1.0.1
+
+**Cột tiếng Nhật của bảng dịch lấy từ bản cartridge 1.0.0.** Bản Anh — bản ta vá
+vào — được làm từ **1.0.1** (1.0.0 + bản cập nhật `v65536`), và `work/jp` cũng là
+1.0.1. Bản 1.0.1 sửa khoảng 350 dòng ở 42/54 file; riêng một cảnh của `206` bị
+viết lại (70 dòng). Mọi chỗ "cột Nhật của bảng khác game" và "khung trong game
+có dòng mà bảng không có hàng nào" đều đến từ đây. **Luôn dịch theo câu trong
+game (1.0.1).**
+
+`--relink` đặt hàng theo bốn lượt, lượt trước được tin hơn lượt sau:
+
+1. khớp câu Nhật theo thứ tự;
+2. `EN ID` của chính bảng, khi hai hàng kề bên bảo đảm cho nó;
+3. khớp nội dung bất kể thứ tự — cho những đoạn 1.0.1 đã đảo (`206` dời cả một
+   lệnh `var` xuống sau đoạn tường thuật);
+4. rót lại cả khung khi bản Anh xoá bớt một dòng rồi dồn câu lên ô trống phía
+   trên (`601` "HATRED", `605` 4522).
+
+Hàng trống không bao giờ đè hàng đã dịch khi hai hàng rơi vào cùng một ô.
+
+### 2c. Danh sách dòng game còn thiếu
+
+```bash
+python tools/chuadich.py "<bang dich>" work/virche_vi.xlsx work/chua_dich.xlsx
+python tools/relinkjp.py "<bang dich>" --report work/relink_loose.csv
+```
+
+`chuadich.py` xuất những dòng game chưa có bản dịch — **cả khi bảng không có
+hàng nào cho chúng** — kèm vị trí để chèn ("chèn sau / trước dòng Excel") và ba
+cột "Ca khung" hiện cả khung thoại. Đọc cả khung, đừng đọc cột EN của riêng một
+dòng: bản Anh ngắt dòng khác, nên chữ Anh của một ô hay mang nghĩa của câu Nhật
+ở ô bên cạnh (`200`/5167 "could only nod" là câu Nhật của 5168).
+
+`relinkjp.py --report` liệt kê hàng đã dịch mà không đặt được. Thường là câu
+1.0.0 mà 1.0.1 đã bỏ, và xoá được.
+
+Khi nhóm dịch **chèn hàng** vào bảng:
+
+- cột A (ID) để trống được — tool vẫn đọc;
+- **cột tiếng Nhật phải là câu trong game**, copy từ file danh sách chứ đừng gõ
+  lại (`――` gõ thành `一` là không khớp nữa) — tool dùng chính câu này để đặt hàng;
+- cột `EN ID` không bắt buộc.
+
+Dòng chỉ có khoảng trắng và `#n` (`　#n`) là dòng đệm, không cần dịch.
 
 ### 2b. Ghép tiêu đề chương
 
@@ -189,6 +234,33 @@ Bốn thứ đã gặp thật, tool nay tự chịu được, nhưng biết đ�
 Với dòng giao diện, số lượng `#n` khác bản gốc là **hợp lệ** — text `.gbin` đi
 qua `gbnl.py` nên không có trần độ dài. Chỉ `#NAME[]`, `#Color[]`, `#PosX[]`
 mới bắt buộc giữ nguyên. Với dòng thoại thì không nới, vì đó là trần khác.
+
+**Với sheet giao diện, cột B (tiếng Anh) là chữ của game — không được sửa**,
+kể cả khi bản Anh gốc sai chính tả. `applyui.py` dùng cột B để xác nhận đúng ô;
+sửa `Lycoris Noirge` thành `Lycoris Noirges` là mục đó bị từ chối và hiện tiếng
+Anh trong Glossary. 18 dòng `strDebug` "không khớp" là menu debug, Excel cắt
+`#n` và `　` ở hai đầu — bỏ qua được.
+
+### Lệnh trong câu thoại: bản Việt được lệch bản Anh ở đâu
+
+`applyvi.py` chấp nhận một dòng / một khung khi lệnh của nó khớp **bản Anh hoặc
+bản Nhật** ở đúng vị trí đó — bảng dịch theo bản Nhật, và hai bản không luôn
+giống nhau (`402`/11750: bản Nhật cố ý bỏ tên ở một phiên bản, bản Anh thì không).
+
+Trong lệnh `var`, `#Color` và `#NAME[1]` được **dời sang dòng khác trong cùng một
+phiên bản** — trật tự từ tiếng Việt khác — miễn là cả phiên bản vẫn đủ lệnh như
+bản Anh hoặc bản Nhật, cặp màu đóng ngay trong dòng, và cả phiên bản đã dịch.
+Dời **sang phiên bản khác** thì vẫn bị chặn: đó đúng là lỗi làm người chơi đổi tên
+thấy "Ceres". Ranh giới phiên bản lấy từ block ngăn trong lệnh; loại opcode không
+có block ngăn thì cắt theo chu kỳ lặp của câu tiếng Anh.
+
+`#n` vẫn so với bản Anh: bỏ được, thêm thì không.
+
+**Lệnh viết sai cú pháp không bị chặn, và đã vào game** — `#Color[0` thiếu `]`,
+`#Ruby[...]` thiếu tham số. Phép kiểm chỉ đếm lệnh viết đúng. `exportvar.py` là
+chỗ duy nhất bắt loại này; chạy nó mỗi khi nhận bảng mới. `#Ruby[nền,đọc]` là
+furigana: bản Nhật dùng 605 lần, file thực thi bản Anh vẫn có cùng lệnh, nhưng
+chưa ai thấy nó chạy trên bản Anh.
 
 ---
 

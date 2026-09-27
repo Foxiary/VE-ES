@@ -472,6 +472,59 @@ outside is 109 chapter titles carrying `...` instead of a title. Re-derive the
 address from the two builds (`mksheet.py --merge --relink`) rather than trusting
 the column.
 
+**The translation is made from JP 1.0.0; the English build is JP 1.0.1.** The
+incoming sheet's Japanese column matches the base cartridge (`[01005B9014BE0000]
+.xci`), while `work/jp` is that plus the `v65536` update, and English was
+localised from the updated script: `206.DAT` has 5215 instructions in 1.0.0 and
+5260 in both 1.0.1 and English. 1.0.1 rewrote about 350 lines across 42 of the
+54 story files - 332 edited, 7 added, 11 removed - and 70 of those in one scene
+of `206`. Those are the rows where a sheet's Japanese disagrees with the game
+(`cau Nhat lech`) and where a box in the game has lines no row covers, and the
+fix is always to translate the 1.0.1 line. Compare against `work/jp`, never
+against the sheet's own Japanese. `STORY.cpk` of the cartridge was checked
+byte for byte against `work/jp`: same size, different content.
+
+**Placing a 1.0.0 sheet on 1.0.1 takes four passes, in trust order, and the
+order matters.** `relinkjp.relink()` runs the ordered alignment, then the
+sheet's own EN ID where both neighbours vouch for it (`between()`), then
+content alone for rows 1.0.1 moved (`reordered()` - 206 moved a whole `var`
+command past three lines of narration), then `rescue_boxes()` for a box where
+English deleted one Japanese line and moved its text up into a spacer slot
+(601 `"HATRED"`, 605/4522). Running `reordered()` before `between()` stole a
+row `between()` would have kept and put a line of dialogue on the wrong slot.
+Verify any change here by diffing every slot of the merged workbook before and
+after - the correct version changed exactly the slots it meant to, 5 of them.
+An empty row must never overwrite a translated one on the same slot; a spacer
+row did exactly that to 601/10723 after it had been rescued.
+
+**Rows the translators insert have no id.** Skipping rows with an empty column A
+threw every such fix away silently. They are read, keyed `+<excel row>`, and
+placed by their Japanese - so an inserted row's Japanese must be the game's
+line verbatim; `一` typed for `――` no longer matches.
+
+**`#Color` and `#NAME[1]` may move between lines of the same `var` version**,
+never across versions: `applyvi.colour_moved()` checks each version's totals
+against English or Japanese. The version boundary comes from separator blocks,
+and for the one opcode that has none, from `split_by_repeat()` - the versions
+are the same English sentence, so its lines repeat with the version's length as
+period. Without that cut, a colour moved from the coloured version into the
+plain one passes. Tested both ways on 101/6701 and 201/7932. Sheet (6) went
+from 103,187 to 103,327 of 103,329 lines written. A line whose commands match
+the Japanese line is also accepted (`keeps_jp()`); 402/11750 names the heroine
+in one Japanese version and deliberately not in the other.
+
+**A malformed command passes every check.** `MARKUP_RX` matches well-formed
+commands only, so `#Color[0` without its bracket is not counted, the line
+balances, and it is written into the game. `exportvar.malformed()` is the only
+check for it. `#Ruby[base,reading]` is furigana: 605 uses in Japanese, none in
+English, but the English executable carries the same 20-token command set
+(`NAME[`, `Color[`, `Ruby[`, …), so the parser knows it. `textwidth` measures
+only the base. Not yet seen running on the English build.
+
+**A slot holding `　#n` is padding, not a line.** 53 English slots hold an
+ideographic space and a line break and nothing else; `cell_text()` now treats
+them as blank.
+
 **A chapter title is `<japanese key>@<display text>`.** The key is what the
 flowchart looks the scene up by; losing it corrupts the scene table rather than
 just the text. Every translated title in the imported sheet had lost it, and
@@ -552,6 +605,8 @@ The text pipeline, in the order it runs:
   where its rows belong instead of trusting its `EN ID` column
 - `relinkjp.py` — what `--relink` runs: aligns a JP-anchored sheet against both
   builds and re-addresses it
+- `chuadich.py` — the game lines still left in English, with where each goes in
+  the translators' sheet and the whole box around it
 - `glossary.py` — the same thing for the Glossary screen alone
 - `linebreak.py` — `#n` on the way out of a sheet, a real newline on the way in
 - `textwidth.py` — how wide a line actually draws, and the measured ceilings
