@@ -97,11 +97,11 @@ from mksheet import (STORY_ROLES, TEXT_OP, SINGLE_BLOCK, cell_text,   # noqa: E4
 # The sheet's own anchor: `26___4AAF0_text`, `359___50110_text10` for one block
 # of a `var`, `0.001_346028` for a row its tool could not address. Only the role
 # is wanted here; the offset is not usable (see HOW THE ROWS ARE RE-ADDRESSED).
-ROW_ID_RX = re.compile(r'^[\d.]+_+[0-9A-F]*_?([a-z]+)\d*$')
+ROW_ID_RX = re.compile(r'^[\d.]+_+[0-9A-F]*_?([a-z]+)(\d*)$')
 EN_ID_RX = re.compile(r'^(\d+)___([0-9A-F]+)_(\w+)$')
 
 # The statuses that mean the row came out with an address on it.
-PLACED = ('ok', 'lech', 'moi', 'giu theo bang')
+PLACED = ('ok', 'lech', 'moi', 'doi cho', 'giu theo bang', 'xep lai khung')
 
 ROLES = set(STORY_ROLES.values())
 HEAD_EN_ID = 'en id'
@@ -234,13 +234,151 @@ def between(en, delta, out):
     return out
 
 
+def true_role(rid, role):
+    """`var` for a sheet row whose id names a block number - `..._text10`.
+
+    That is the sheet's spelling of one line of a `var` command, and the
+    Japanese sequence calls it `var`, so a content match must too. Only
+    reordered() asks: the ordered pass keeps reading it as `text`, because
+    changing what it compares moved its pairing in 206 and put a line of
+    dialogue on the wrong slot - its `replace` runs pair lines by position, and
+    that is what places a row whose Japanese is 1.0.0 but whose Vietnamese was
+    already corrected to 1.0.1.
+    """
+    m = ROW_ID_RX.match(rid)
+    return 'var' if m and m.group(2) else role
+
+
+def reordered(seq, rows, pairs):
+    """`pairs` plus the rows a script revision moved elsewhere in the file.
+
+    difflib keeps order, and 1.0.1 did not always: in 206 it moved a whole
+    `var` command - 「――この命をかけて―― / 君を愛してる、#NAME[1]」 - from before
+    「優しくも残酷な、」 to after 「多くの命が眠る花園の上で、」. An ordered
+    alignment can keep only one side of a swap, so the translation of the other
+    was left without a place and the game drew English there, while the report
+    of missing lines asked for it to be translated again.
+
+    So a row still unplaced after the ordered pass is placed by content alone:
+    its Japanese, folded, against the sequence entries nobody has claimed. A
+    key is only used when it is unambiguous - as many loose rows as free
+    entries carry it, paired in order - so a common line such as 「はい」 that is
+    loose once and free twice is left alone. Lines that fold to nothing are
+    never matched this way.
+    """
+    used = set(pairs.values())
+    free = collections.defaultdict(list)
+    for s, (_i, _b, role, text) in enumerate(seq):
+        if s not in used:
+            free[fold(role, text)].append(s)
+    loose = collections.defaultdict(list)
+    for k, (rid, role, text, _vi, _en) in enumerate(rows):
+        if k not in pairs:
+            loose[fold(true_role(rid, role), text)].append(k)
+    out = {}
+    for key, ks in loose.items():
+        if not key.split('\x00', 1)[1]:
+            continue                       # folds to nothing: nothing to match on
+        ss = free.get(key, [])
+        if ss and len(ss) == len(ks):
+            out.update(zip(ks, ss))
+    return out
+
+
+def _blank(t):
+    return not (t or '').replace('#n', '').strip(' \t\u3000')
+
+
+def rescue_boxes(en, jp, en_delta, jp_delta, amap, seq, out):
+    """Re-pour a box whose Japanese has a line the English deleted.
+
+    In the four files where Japanese carries more instructions, the localiser
+    sometimes dropped one line of a box and moved its text up into a spacer
+    slot of the same box. 601 draws `"HATRED"` in 10723, whose Japanese block is
+    a bare space, and the 【憎い】 it translates sits in Japanese 10724, which
+    English does not have. A row for that line is aligned correctly and still
+    has nowhere to go: `ban Anh khong co lenh tuong ung`. Three such rows held a
+    translation, and the three English slots they belong to were exactly three
+    of the lines reported untranslated.
+
+    So a box holding such a row is laid out again. Its rows are taken in
+    Japanese order, the box's English slots that draw anything - English text,
+    or Japanese text at their counterpart - are taken in order, and when the two
+    counts agree the rows are poured into the slots one for one. Counts that do
+    not agree leave the box as it was. Only `text` boxes: a `var` command keeps
+    its versions and is never re-cut.
+    """
+    roles = {op + en_delta: r for op, r in STORY_ROLES.items()}
+    jroles = {op + jp_delta: r for op, r in STORY_ROLES.items()}
+    inv = {v: k for k, v in amap.items()}
+    ins = en.instructions
+
+    def box_of(e):
+        a = b = e
+        while a > 0 and roles.get(ins[a - 1].opcode) == 'text':
+            a -= 1
+        while b + 1 < len(ins) and roles.get(ins[b + 1].opcode) == 'text':
+            b += 1
+        return a, b
+
+    done = set()
+    for k, (row, eid, status) in enumerate(out):
+        if status != 'ban Anh khong co lenh tuong ung' or row[1] != 'text':
+            continue
+        # the Japanese instruction this row landed on, and the English box
+        # around the nearest instruction before it that English does have
+        j = next((i for i, _b, r, t in seq if fold(r, t) == fold('text', row[2])
+                  and i not in inv), None)
+        if j is None:
+            continue
+        e = next((inv[x] for x in range(j - 1, max(j - 40, -1), -1) if x in inv), None)
+        if e is None or roles.get(ins[e].opcode) != 'text':
+            continue
+        a, b = box_of(e)
+        if (a, b) in done:
+            continue
+        done.add((a, b))
+        live = []
+        for i in range(a, b + 1):
+            eb = ins[i].blocks[0] if ins[i].blocks else None
+            jb = jp.instructions[amap[i]].blocks if i in amap else []
+            if eb is None or eb.text() is None:
+                continue
+            if not _blank(eb.text()) or (jb and not _blank(jb[0].text())):
+                live.append(i)
+        ja = amap.get(a); jb_ = amap.get(b)
+        if ja is None or jb_ is None:
+            continue
+        members = []
+        for m, (r2, eid2, st2) in enumerate(out):
+            if _blank(r2[2]) and not r2[3]:
+                continue                   # a spacer row: nothing to pour
+            if eid2 and a <= int(eid2.split('___')[0]) <= b:
+                members.append((amap[int(eid2.split('___')[0])], m))
+            elif st2 == 'ban Anh khong co lenh tuong ung' and r2[1] == 'text':
+                jj = next((i for i, _b, r, t in seq if fold(r, t) == fold('text', r2[2])
+                           and i not in inv and ja <= i <= jb_ + 8), None)
+                if jj is not None:
+                    members.append((jj, m))
+        members.sort()
+        if not members or len(members) != len(live):
+            continue
+        for (_jj, m), i in zip(members, live):
+            r2 = out[m][0]
+            new_eid = '%d___%X_text' % (i, ins[i].blocks[0].data_off)
+            if out[m][1] != new_eid:
+                out[m] = (r2, new_eid, 'xep lai khung')
+    return out
+
+
 def relink(en, jp, en_delta, rows):
     """[(row, new en id, status)] for one script file, in the sheet's order.
 
     `rows` is the sheet's own rows as `sheet_rows()` reads them. Status is
     `ok` / `lech` / `moi` when the alignment placed the row - against what the
-    sheet already said - `giu theo bang` when `between()` handed its own id
-    back, and the reason when it was not placed at all.
+    sheet already said - `doi cho` when reordered() found it moved, `giu theo
+    bang` when `between()` handed its own id back, and the reason when it was
+    not placed at all.
     """
     amap = align(en, jp)                       # {en index: jp index}
     jp_delta = jp_delta_of(en, jp, en_delta, amap)
@@ -250,27 +388,46 @@ def relink(en, jp, en_delta, rows):
     jp2en = {v: k for k, v in amap.items()}
     seq = jp_sequence(jp, jp_delta)
     slots = en_slots(en, en_delta)
-    pairs = pair_rows(seq, rows)
 
-    out = []
-    for k, row in enumerate(rows):
-        if k not in pairs:
-            out.append((row, None, 'khong khop duoc vi tri'))
-            continue
-        ins_i, blk_i, role, _text = seq[pairs[k]]
+    def place(k, row, s, moved=False):
+        ins_i, blk_i, role, _text = seq[s]
         en_i = jp2en.get(ins_i)
         if en_i is None:
-            out.append((row, None, 'ban Anh khong co lenh tuong ung'))
-            continue
+            return (row, None, 'ban Anh khong co lenh tuong ung')
         slot = slots.get((en_i, blk_i))
         if slot is None or slot[0] != role:
-            out.append((row, None, 'o ben Anh khac loai'))
-            continue
+            return (row, None, 'o ben Anh khac loai')
         eid = '%d___%X_%s' % (en_i, slot[1].data_off, role)
+        if moved:
+            return (row, eid, 'doi cho')
         old = row[4]
-        status = 'moi' if not old else ('ok' if old == eid else 'lech')
-        out.append((row, eid, status))
-    return between(en, en_delta, out)
+        return (row, eid, 'moi' if not old else ('ok' if old == eid else 'lech'))
+
+    # Three passes, most trusted first. The ordered alignment; then the sheet's
+    # own EN ID where the rows either side vouch for it; and only then content
+    # alone, for what a revision moved. Run before between(), reordered() took
+    # a row between() would have kept in place, and every neighbour it vouched
+    # for lost its cover: 206/5145-5146 went blank, 5170 got the wrong line.
+    pairs = pair_rows(seq, rows)
+    out = [place(k, row, pairs[k]) if k in pairs
+           else (row, None, 'khong khop duoc vi tri')
+           for k, row in enumerate(rows)]
+    out = between(en, en_delta, out)
+
+    seq_at = {(i, b): n for n, (i, b, _r, _t) in enumerate(seq)}
+    taken = dict((k, s) for k, s in pairs.items())
+    for k, (row, eid, _st) in enumerate(out):
+        if eid and k not in taken:
+            en_i = int(eid.split('___')[0])
+            off = int(eid.split('___')[1].split('_')[0], 16)
+            blk_i = next((b for b, bl in enumerate(en.instructions[en_i].blocks)
+                          if bl.data_off == off), None)
+            n = seq_at.get((amap.get(en_i), blk_i))
+            if n is not None:
+                taken[k] = n
+    for k, s in reordered(seq, rows, taken).items():
+        out[k] = place(k, rows[k], s, moved=True)
+    return rescue_boxes(en, jp, en_delta, jp_delta, amap, seq, out)
 
 
 # ------------------------------------------------------------------ the sheet
@@ -282,6 +439,16 @@ def sheet_rows(ws):
     Vietnamese; the English id is found by its header and falls back to column
     E. Line breaks come back in the game's spelling, as everywhere else that
     reads a sheet.
+
+    A ROW THE TRANSLATORS INSERTED HAS NO ID, AND STILL COUNTS. Where the game's
+    box has a line the sheet never had - the sheet's Japanese comes from another
+    revision of the script - the fix is to insert a row with that line, and the
+    translators do it with column A left empty. Skipping rows without an id, as
+    this once did, silently threw exactly those fixes away: 200/5167 was
+    inserted, translated, and would not have reached the game. Such a row gets
+    `+<excel row>` as its id, so a report can still point at it, and its role
+    from the English id's suffix when there is one. The alignment places it by
+    its Japanese like any other row.
     """
     it = ws.iter_rows(values_only=True)
     head = [str(c).strip().lower() if c else '' for c in next(it, ())]
@@ -292,14 +459,21 @@ def sheet_rows(ws):
         return str(r[i]).strip() if i < len(r) and r[i] is not None else ''
 
     out = []
-    for r in it:
-        if not r or not r[0]:
+    for excel_row, r in enumerate(it, start=2):
+        if not r:
             continue
-        rid = str(r[0]).strip()
-        m = ROW_ID_RX.match(rid)
-        role = m.group(1) if m and m.group(1) in ROLES else 'text'
-        out.append((rid, role, to_game(cell(r, 1)),
-                    to_game(cell(r, c_vi)), cell(r, c_en)))
+        rid = cell(r, 0)
+        jp, vi, en_id = to_game(cell(r, 1)), to_game(cell(r, c_vi)), cell(r, c_en)
+        if not rid:
+            if not (jp or vi):
+                continue                   # a genuinely empty row
+            rid = '+%d' % excel_row
+            m = EN_ID_RX.match(en_id)
+            role = m.group(3) if m and m.group(3) in ROLES else 'text'
+        else:
+            m = ROW_ID_RX.match(rid)
+            role = m.group(1) if m and m.group(1) in ROLES else 'text'
+        out.append((rid, role, jp, vi, en_id))
     return out
 
 
@@ -350,7 +524,12 @@ def tables(sheets, en_path, jp_path, on_file=None):
                     loose.append((name, rid, status, old, jp, vi))
                 continue
             # Several sheet rows can land on one slot - a `var` instruction
-            # ships the same box twice. Last one wins, as the merge does.
+            # ships the same box twice. Last one wins, as the merge does,
+            # except that an empty row never wins over a translated one: a
+            # spacer row aligned onto 601/10723 after rescue_boxes() had put
+            # 「憎い」's translation there, and wiped it.
+            if not vi and table.get(eid, ('', ''))[0]:
+                continue
             table[eid] = (vi, jp)
         out[name] = table
         st.update(per)
@@ -390,6 +569,8 @@ def main():
     print('EN ID giu nguyen      %s' % format(st['ok'], ','))
     print('EN ID sua lai         %s' % format(st['lech'], ','))
     print('EN ID them moi        %s' % format(st['moi'], ','))
+    print('doi cho               %s (ban 1.0.1 dao thu tu, khop theo noi dung)'
+          % format(st['doi cho'], ','))
     print('giu theo bang         %s (khong khop duoc nhung ID cu nam dung giua)'
           % format(st['giu theo bang'], ','))
     print('khong dat duoc        %s dong, trong do %s dong co ban dich'

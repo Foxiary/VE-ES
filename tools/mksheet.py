@@ -284,8 +284,12 @@ def cell_text(block, allow_short):
         return None                      # a little-endian number, not a string
     if not allow_short and block.length <= 4:
         return None
-    if not t.strip(SPACERS):
-        return None                      # blank line used to pad a message box
+    # A blank line used to pad a message box. `#n` counts as blank here: 53
+    # English slots hold an ideographic space and a line break and nothing else
+    # - the Japanese block at each is a bare space - and taken as text they
+    # were listed as lines awaiting a translation there is nothing to write for.
+    if not t.replace('#n', '').strip(SPACERS):
+        return None
     return t
 
 
