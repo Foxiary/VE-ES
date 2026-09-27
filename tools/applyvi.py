@@ -106,6 +106,28 @@ MARKUP MUST SURVIVE
     outright, one using `#NAME[1]` for a player-named protagonist - not two
     consecutive lines, so there is no box to count over and a half-sentence in
     one of them is a half-sentence on screen.
+
+    THE JAPANESE LINE IS A VALID ANSWER TOO. The translation follows the
+    Japanese build, so a line - or, for `text`, a box - whose commands match
+    the Japanese at that position is written even where it disagrees with the
+    English. The two builds disagree more than one would guess: in 402/11750
+    and 500/8343 the Japanese names the heroine in one version of the box and
+    deliberately not in the other, while English named her in both. Measured on
+    sheet (10) this writes 263 more lines and takes the refusals from 330 to 67.
+    `#n` is the exception and still answers to the English block. The Japanese
+    column is the one `mksheet.py` fills structurally; a row with no Japanese
+    counterpart gets no exception. See keeps_jp().
+
+    A COLOUR MAY MOVE WITHIN ITS VERSION. Vietnamese orders a sentence
+    differently, so a highlighted phrase lands a line up or down inside the
+    same `var` version, and 22 lines of sheet (10) were refused for nothing
+    else. colour_moved() lets them through when the pair closes on its own line,
+    the version as a whole carries the English or Japanese colour commands, and
+    names stay line for line. The version boundary is what makes that safe: a
+    pair moved into the OTHER version is still refused, and one opcode with no
+    separator between versions is cut by split_by_repeat(). Of the 45 lines left
+    after it, 43 are the same thing with `#NAME[1]` instead of `#Color`, which
+    stays strict on purpose.
 """
 import argparse
 import collections
@@ -129,6 +151,7 @@ NL = '#n'                       # a line break inside one slot, not a command
 HEAD_ID = 'id'
 HEAD_SRC = 'nguon (en)'
 HEAD_TGT = 'tieng viet'
+HEAD_JP = 'tieng nhat'          # optional: what keeps_jp() compares against
 
 # Why a line's commands were refused. Kept in one place so the per-sheet column
 # and the summary cannot drift apart, and listed in the order they are printed.
@@ -153,11 +176,164 @@ def keeps_markup(tgt, cur):
     return all(tgt[k] == cur[k] for k in set(tgt) | set(cur) if k != NL)
 
 
+def keeps_jp(tgt, cur, jp):
+    """Whether a replacement carries the commands of the JAPANESE line instead.
+
+    The translation is made from the Japanese build, not the English one, and
+    the two do not always agree on markup: in 402/11750 the Japanese writes one
+    version of the box with the heroine's name and the other without it
+    (`#NAME[1]嬢` against `死神のお嬢さん`), while English put the name in both.
+    A Vietnamese line that follows the Japanese is right, and refusing it for
+    disagreeing with English left that version's first line in English inside
+    an otherwise Vietnamese box.
+
+    Safe for the same reason the Japanese game runs: the two builds are the
+    same script, instruction for instruction, so a block the Japanese build
+    resolves `#NAME[1]` in has the name context in English too. What broke
+    605.DAT was a `#NAME[1]` landing in the WRONG block - which is what a
+    drifted EN ID does, and what `relinkjp.py` removed. `#n` still answers to
+    the English count: a break the English block did not have can push text out
+    of a box the Japanese one never had to fit.
+    """
+    if tgt[NL] > cur[NL]:
+        return False
+    return all(tgt[k] == jp[k] for k in set(tgt) | set(jp) if k != NL)
+
+
+COLOR_RX = re.compile(r'#Color\[(\d+)\]')
+NAME_RX = re.compile(r'#NAME\[\d+\]')
+CMD_RX = re.compile(r'#(?:NAME|Color)\[\d+\]')   # what a version must balance
+
+
+def colour_closes(text):
+    """Whether every colour this line opens it also closes, on the same line.
+
+    Required of a line whose colour moved, because nothing shows the engine
+    carrying a colour from one line to the next: of the 107 English and 105
+    Japanese lines that use `#Color`, not one leaves a pair open.
+    """
+    depth = 0
+    for m in COLOR_RX.finditer(text or ''):
+        depth += 1 if m.group(1) != '0' else -1
+        if depth not in (0, 1):
+            return False
+    return depth == 0
+
+
+def versions(ins):
+    """[[block data offset, ...]] - the versions one `var` instruction ships.
+
+    A version is a run of consecutive line blocks, and the runs are separated
+    by the number and control-word blocks the instruction carries between them
+    - `text() is None`, or a payload with a control character in it. An empty
+    block counts as a line: that is what an English slot left blank looks like.
+    An opcode that puts no separator between its versions comes back as one run;
+    split_by_repeat() then cuts it.
+    """
+    out, run = [], []
+    for b in ins.blocks:
+        t = b.text()
+        if t is not None and not any(ord(c) < 0x20 for c in t):
+            run.append(b.data_off)
+        elif run:
+            out.append(run)
+            run = []
+    if run:
+        out.append(run)
+    return out
+
+
+def split_by_repeat(run, blocks):
+    """[[offset, ...]] - one separator-less run cut into its versions, or None.
+
+    One of the three `var` opcodes puts nothing between its versions, so
+    versions() hands back the whole command as a single run, and counting a
+    colour over that would pass a pair moved from the coloured version into the
+    plain one. The versions are the same English sentence written again with
+    different commands, so the English lines repeat with a period equal to one
+    version's length: the smallest such period is the cut. Commands are folded
+    away before comparing, and `#NAME[1]` read as the default name it replaces.
+    None when the lines do not repeat - the caller then relaxes nothing.
+    """
+    keys = [re.sub(r'\s+', '', COLOR_RX.sub('', NAME_RX.sub(
+        'Ceres', blocks[o].text() or ''))) for o in run]
+    n = len(keys)
+    for p in range(1, n):
+        if n % p == 0 and all(keys[i] == keys[i % p] for i in range(n)):
+            return [run[i:i + p] for i in range(0, n, p)]
+    return None
+
+
+def colour_moved(script, var_rows):
+    """{row id} for `var` lines whose only fault is a command on another line.
+
+    `var_rows` is [(row id, block offset, vietnamese, english, japanese)] for
+    every translated `var` row of the file that addresses its block. Vietnamese
+    orders a sentence differently, so a highlighted phrase regularly lands one
+    line up or down inside the SAME version - 67 lines of sheet (10), all of
+    them refused line by line although nothing is lost:
+
+        JP  予めその人の【血】から得られる | #Color[8]【遺伝子】#Color[0]を保存……」
+        VI  chúng ta phải lưu trữ sẵn #Color[8]mã gen#Color[0] | được trích xuất...
+
+    A line is let through when all of this holds: its colour pairs close on the
+    line; it adds no `#n`; and its version, taken whole, carries the same
+    `#Color` AND `#NAME` commands as the English or the Japanese version, with
+    every line of that version translated so that none of it keeps its English.
+
+    `#NAME[1]` MAY MOVE TOO, BUT ONLY INSIDE ITS VERSION. It was held to its line
+    at first, because a name that moves from one version to another is exactly
+    the damage the per-line rule guards against - the version a renamed player
+    sees would lose the name. What made that safe to lift is the version
+    boundary: versions() and split_by_repeat() cut the command so that a
+    command moved into the other version fails its version's total. That left
+    44 lines of sheet (6) refused, English on screen, for a name placed one line
+    down in the same sentence - 201/7932 is `giong em #NAME[1] nhu duc.` on
+    line 3 where English put the name on line 2.
+    """
+    ok = set()
+    by_ins = collections.defaultdict(dict)
+    for rid, off, tgt, cur, jp in var_rows:
+        by_ins[int(rid.split('___')[0])][off] = (rid, tgt, cur, jp)
+    blocks = {b.data_off: b for b in script.blocks()}
+    for ins_i, rows in by_ins.items():
+        runs = versions(script.instructions[ins_i])
+        if len(runs) == 1:
+            runs = split_by_repeat(runs[0], blocks)
+            if runs is None:
+                continue                   # versions not located: relax nothing
+        for run in runs:
+            need = [o for o in run if o in rows or (blocks[o].text() or '').strip()]
+            if not need or any(o not in rows for o in need):
+                continue                   # half a version would keep English
+            here = [rows[o] for o in need]
+            if not all(colour_closes(t) for _r, t, _c, _j in here):
+                continue
+            if any(markup(t)[NL] > markup(c)[NL] for _r, t, c, _j in here):
+                continue
+
+            def colours(i):
+                return sum((collections.Counter(
+                    m.group(0) for m in CMD_RX.finditer(x[i] or ''))
+                    for x in here), collections.Counter())
+            vi, en = colours(1), colours(2)
+            jp = None if any(x[3] is None for x in here) else colours(3)
+            if vi == en or vi == jp:
+                ok.update(x[0] for x in here)
+    return ok
+
+
+def fits(tgt, cur, jp):
+    """keeps_markup() against English, or keeps_jp() against Japanese."""
+    return keeps_markup(tgt, cur) or (jp is not None and keeps_jp(tgt, cur, jp))
+
+
 def box_verdicts(boxes, info):
     """{row id: reason} for every `text` row that may not be written.
 
-    `info` is {row id: (vietnamese, english)} for the text rows that got as far
-    as the command check; `boxes` is `reflow.boxes_of` output, the real text
+    `info` is {row id: (vietnamese, english, japanese)} for the text rows that
+    got as far as the command check, japanese None when the sheet has no such
+    column; `boxes` is `reflow.boxes_of` output, the real text
     slots of each message box in order, or None when the file's opcode table
     could not be located.
 
@@ -173,8 +349,9 @@ def box_verdicts(boxes, info):
     Refusing the whole box there would hold back 34 more lines that are correct
     on their own, to no end - nothing is being carried across them.
     """
-    out = {rid: 'markup lech' for rid, (tgt, cur) in info.items()
-           if not keeps_markup(markup(tgt), markup(cur))}
+    out = {rid: 'markup lech' for rid, (tgt, cur, jp) in info.items()
+           if not fits(markup(tgt), markup(cur),
+                       None if jp is None else markup(jp))}
     for rids in boxes or ():
         if not any(rid in out for rid in rids):
             continue                       # every line of the box balances
@@ -185,7 +362,9 @@ def box_verdicts(boxes, info):
             continue
         tgt = sum((markup(info[rid][0]) for rid in rids), collections.Counter())
         cur = sum((markup(info[rid][1]) for rid in rids), collections.Counter())
-        if keeps_markup(tgt, cur):
+        jp = (None if any(info[rid][2] is None for rid in rids) else
+              sum((markup(info[rid][2]) for rid in rids), collections.Counter()))
+        if fits(tgt, cur, jp):
             for rid in rids:
                 out.pop(rid, None)         # the box covers every line in it
             continue
@@ -247,12 +426,16 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
     to read and address every row, one to write the rows their box allows.
     """
     rows = ws.iter_rows(values_only=True)
-    c_id, c_src, c_tgt = sheet_columns(next(rows, ()))
+    head = next(rows, ())
+    c_id, c_src, c_tgt = sheet_columns(head)
+    low = [str(c).strip().lower() if c else '' for c in head]
+    c_jp = low.index(HEAD_JP) if HEAD_JP in low else None
     by_off = {b.data_off: b for b in script.blocks()}
     repl, st = {}, collections.Counter()
     queue = []                  # rows that name a block holding their source
     info = {}                   # text rows only: id -> (vietnamese, english)
     seen = set()                # every text row this sheet names, translated or not
+    var_rows = []               # var rows addressing their block, for colour_moved()
 
     for r in rows:
         if not r or c_id >= len(r) or not r[c_id]:
@@ -270,6 +453,11 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
         # is invisible in Excel and would come back as a trailing #n.
         src = to_game(str(r[c_src]).strip()) if c_src < len(r) and r[c_src] else ''
         tgt = to_game(str(r[c_tgt]).strip()) if c_tgt < len(r) and r[c_tgt] else ''
+        # An empty Japanese cell means no counterpart was found, not that the
+        # Japanese line carries no commands - so it is None, and keeps_jp() is
+        # not asked. Treating it as '' would let a line drop every command.
+        jp = (to_game(str(r[c_jp]).strip())
+              if c_jp is not None and c_jp < len(r) and r[c_jp] else None)
         if not tgt:
             st['chua dich'] += 1
             continue
@@ -291,9 +479,11 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
         if cur is None or cur.strip() != src:
             st['van ban khong khop'] += 1        # workbook built from another dump
             continue
-        queue.append((rid, kind, src, tgt, off, blk, cur))
+        queue.append((rid, kind, src, tgt, off, blk, cur, jp))
+        if kind == 'var':
+            var_rows.append((rid, off, tgt, cur, jp))
         if kind == 'text':
-            info[rid] = (tgt, cur)
+            info[rid] = (tgt, cur, jp)
 
     # A box is only as wide as the slots this sheet carries: one it does not
     # name cannot be translated, so counting it would refuse the box for a
@@ -301,7 +491,8 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
     if boxes is not None:
         boxes = [[rid for rid in box if rid in seen] for box in boxes]
     refused = box_verdicts(boxes, info)
-    for rid, kind, src, tgt, off, blk, cur in queue:
+    moved = colour_moved(script, var_rows)
+    for rid, kind, src, tgt, off, blk, cur, jp in queue:
         if kind == 'text':
             # Counted over the whole message box; see MARKUP MUST SURVIVE.
             why = refused.get(rid)
@@ -309,8 +500,15 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
                 st[why] += 1
                 continue
         elif markup(tgt) != markup(cur):
-            st['markup lech'] += 1
-            continue
+            # Strict against English, line by line - but a line that carries
+            # exactly the Japanese line's commands follows its source.
+            if jp is not None and keeps_jp(markup(tgt), markup(cur), markup(jp)):
+                st['theo ban Nhat'] += 1
+            elif rid in moved:
+                st['mau doi dong'] += 1
+            else:
+                st['markup lech'] += 1
+                continue
         if off in repl:
             st['trung dich'] += 1
             continue
@@ -524,6 +722,12 @@ def main():
               'bo vi qua rong', 'bo vi qua dai'):
         if tot[k]:
             print('  bo qua - %-24s %s' % (k, format(tot[k], ',')))
+    if tot['theo ban Nhat']:
+        print('  ghi - lenh lech ban Anh nhung khop ban Nhat  %s'
+              % format(tot['theo ban Nhat'], ','))
+    if tot['mau doi dong']:
+        print('  ghi - lenh doi sang dong khac cung phien ban  %s'
+              % format(tot['mau doi dong'], ','))
     if nodelta:
         print('!! %d file khong doc duoc bang opcode, dem lenh theo tung dong: %s'
               % (len(nodelta), ' '.join(nodelta[:12])))

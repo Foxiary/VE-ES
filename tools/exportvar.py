@@ -4,33 +4,27 @@ exportvar.py - the lines applyvi.py refuses whose markup is REALLY broken.
     python tools/exportvar.py work/virche_vi.xlsx work/virche_var.xlsx
     python tools/exportvar.py work/virche_vi.xlsx out.xlsx --sheet 101
 
-`applyvi.py` refuses 851 story lines for `markup lech`: the inline commands in
-the Vietnamese do not match the English block being overwritten. Handing a
-translator all 851 would be handing them mostly noise. The check counts
-commands PER LINE, and a line is not the unit anyone translated in - so most of
-those 851 are the check being too literal, and only about an eighth are text a
-player would actually see go wrong. This tool writes out that eighth.
+The inline commands in the Vietnamese do not match the English block being
+overwritten, and the per-line check says so about 861 lines. `applyvi.py`
+already forgives most of them - it counts over the message box, not the line -
+and refuses 343: 319 `var`, 3 `name`, 18 lines of boxes that do not balance and
+3 of boxes missing a translation. Handing a translator all 343 is still handing
+them mostly noise, because the box is not the widest unit either. This tool
+narrows it to 89 lines, and reading those 89 turns up six real defects.
 
-WHAT THE 851 ACTUALLY ARE
-    Measured on work/virche_vi.xlsx, 54 script sheets:
+WHAT THE REFUSALS ACTUALLY ARE
+    Measured on work/virche_vi.xlsx, 54 script sheets, 103,382 rows:
 
-    496 `text` lines  the command only MOVED to the neighbouring line of the
-                      SAME message box, because the translator re-broke the box.
-                      Summed over the box the counts balance exactly - 459 boxes
-                      hold these 496 lines. Harmless.
-    427 lines         the English spells a `#n` inside the line and the
-                      translation merged the two halves into one, and that is
-                      the ONLY thing that differs. 431 `#n` dropped in all, 0
-                      added, and the width pass clears every merged line.
-     37 `text` +
-      3 `name` lines  a command genuinely gone or invented, box-wide - usually
-                      `#NAME[1]` replaced by a pronoun, or one half of a
-                      `#Color[8]...#Color[0]` pair dropped. One per box, in 37
-                      boxes.
-    315 `var` lines   see below. Not harmless, and not relaxable either.
-
-    (The first two overlap: a line can both merge a `#n` and move a `#Color`,
-    which is why they add up past 851.)
+    472 boxes        the command only MOVED to the neighbouring line of the
+                     SAME message box, because the translator re-broke it.
+                     Summed over the box the counts balance exactly. Harmless,
+                     and `applyvi.py` writes them.
+     18 boxes        a command genuinely gone or invented box-wide - usually
+                     `#NAME[1]` replaced by a pronoun, or the reverse. 45 lines.
+      3 `name` rows  `#NAME[1] & Salome & Jean` translated as `Ba nguoi`.
+    510 var commands balance over the whole command. 307 of the 319 refused
+                     `var` lines sit in these; see below.
+      8 var commands do not balance. 41 lines.
 
 WHY `var` CANNOT BE FORGIVEN THE WAY A BOX CAN
     A `var` instruction ships SEVERAL VERSIONS of one message box and the engine
@@ -47,21 +41,23 @@ WHY `var` CANNOT BE FORGIVEN THE WAY A BOX CAN
     and came back cut in half, the first slot holding the opening clause and the
     second the rest. Whichever version the engine picks, half the sentence is
     gone. So a `var` line that loses `#NAME[1]` is a real defect, and relaxing
-    the check box-wide - which is right for `text` - would wave it through.
+    the check command-wide - which is right for a text box - would wave it
+    through.
 
 WHICH `var` COMMANDS ARE EXPORTED
-    523 var commands carry translatable text; 425 spell `#NAME[1]` on the
-    English side. Of those, 341 keep the same number of them, 4 are not fully
-    translated, and 80 do not - 59 dropped every one, 20 dropped some, 1 gained
-    some. Those 80 are what goes out.
+    The eight whose commands do not balance: 2 dropped every one, 3 dropped
+    some, 3 gained some. Reading them, five are real - 302/9909 and 404/4280
+    still say `Ceres` in the version meant for a renamed heroine, 500/8343 and
+    402/11750 drop the name from one version, and 201/6810 writes `#Color[0`
+    without its closing bracket - and three only break the line differently
+    than English did.
 
-    The remaining 235 refused `var` lines sit in commands whose `#NAME[1]` total
-    does balance: the command moved between the lines of one version, the same
-    way it does inside a text box. The count cannot tell those apart from a
-    version that was genuinely mangled, because it cannot see where one version
-    ends and the next begins - the block layout that separates them differs per
-    opcode, and one of the three opcodes has no separator block at all. They are
-    reported on stdout and deliberately left out rather than guessed at.
+    The 510 that balance are left out on purpose. The count cannot tell a
+    command that moved between the lines of ONE version from a version that was
+    genuinely mangled, because it cannot see where one version ends and the next
+    begins - the block layout that separates them differs per opcode, and one of
+    the three opcodes has no separator block at all. They are reported on stdout
+    rather than guessed at.
 
     Every line of a chosen command is exported, not just the offending one: the
     fix is to make each version a whole sentence again, which cannot be done
@@ -81,7 +77,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from applyvi import cell_str, read_scripts            # noqa: E402
+from applyvi import cell_str, read_scripts, keeps_jp  # noqa: E402
 from linebreak import to_game, to_sheet               # noqa: E402
 from mksheet import Workbook as SheetWorkbook         # noqa: E402
 from mksheet import detect_delta, sheet_name          # noqa: E402
@@ -96,12 +92,12 @@ ID_RX = re.compile(r'^(\d+)___([0-9A-Fa-f]+)_(text|name|choice|title|var)$')
 # player never sees. Only the second half decides what is exported.
 MARKUP_RX = re.compile(r'#(?:NAME|Color)\[\d+\]|#n')
 CMD_RX = re.compile(r'#(?:NAME|Color)\[\d+\]')
-NAME_RX = re.compile(r'#NAME\[\d+\]')
+
 
 # Verdicts on one `var` command; the first three are what gets exported.
-VAR_LOST = 'MAT HET #NAME[1]'
-VAR_PART = 'MAT MOT PHAN #NAME[1]'
-VAR_EXTRA = 'THUA #NAME[1]'
+VAR_LOST = 'MAT HET LENH'
+VAR_PART = 'MAT MOT PHAN LENH'
+VAR_EXTRA = 'THUA LENH'
 VAR_TAKE = (VAR_LOST, VAR_PART, VAR_EXTRA)
 
 NOTE_WIDTH = 54
@@ -118,6 +114,82 @@ Row = collections.namedtuple('Row', 'rid ins kind en vi jp')
 
 def counts(rx, text):
     return collections.Counter(rx.findall(text or ''))
+
+
+# Every inline command the two shipped builds actually spell, and nothing else.
+# `#Ruby` is in here because the JAPANESE build uses it 605 times - furigana,
+# `#Ruby[base,reading]` - while the English build uses it not once, so a
+# translator who copies one across from the Japanese source has no English row
+# to copy the shape from.
+WELL_FORMED = re.compile(r'#(?:NAME|Color)\[\d+\]|#PosX\[[^\]]*\]'
+                         r'|#Ruby\[[^\],]+,[^\]]+\]|#n')
+COMMAND_START = re.compile(r'#[A-Za-z]')
+
+# What a malformed command looks like, most specific first.
+MALFORMED = (
+    (re.compile(r'#(?:NAME|Color|Ruby|PosX)\[[^\]]*$'),
+     'thieu dau ] dong lenh'),
+    (re.compile(r'#Ruby\[[^\],]+\]'),
+     'lenh #Ruby thieu tham so thu hai - phai la #Ruby[chu nen,chu doc]'),
+    (re.compile(r'#(?:NAME|Color)\[\D'),
+     'trong ngoac phai la so'),
+)
+
+
+def malformed(text):
+    """Why this line's inline commands are not well formed, or '' when they are.
+
+    A check nobody else makes. `MARKUP_RX` only matches a WELL FORMED command,
+    so a broken one is invisible to every count in this file and to
+    `applyvi.py`: `#Color[0` without its bracket simply does not register as a
+    command, and the line sails through and is written into the game. Two lines
+    of the shipped translation are like that, and neither was refused.
+    """
+    if not text or '#' not in text:
+        return ''
+    for rx, why in MALFORMED:
+        m = rx.search(text)
+        if m:
+            return '%s -> %r' % (why, m.group(0)[:16])
+    rest = WELL_FORMED.sub('', text)
+    m = COMMAND_START.search(rest)
+    return 'lenh khong doc duoc -> %r' % rest[m.start():m.start() + 16] if m else ''
+
+
+# Why a missing command matters, keyed by the command itself.
+BOX_WHY = {
+    '#NAME[1]': 'Bo #NAME[1] la mat ten nu chinh do nguoi choi tu dat, tren '
+                'man hinh se khong con ten do nua.',
+    '#Color[8]': 'Thieu #Color[8] thi doan chu le ra phai doi mau se hien mau '
+                 'thuong.',
+    '#Color[0]': 'Thieu #Color[0] thi mau KHONG BAO GIO DUOC DONG, chu phia '
+                 'sau doi mau cho den het khung thoai.',
+    '': 'Ma lenh thieu se lam khung thoai hien sai.',
+}
+
+
+def why_of(bad):
+    """The plain sentence for whichever command `diff()` says went missing.
+
+    `diff()` phrases it as `mat 1 #NAME[1]`, so the command is the third word,
+    not the second - reading the second answered `1` and every row fell back to
+    the generic line.
+    """
+    parts = (bad or '').split()
+    return BOX_WHY.get(parts[2] if len(parts) > 2 else '', BOX_WHY[''])
+
+
+def note(loi, sua, vi_tri):
+    """The `Ghi chu` cell: what is wrong, what to do, where this line sits.
+
+    Three labelled lines rather than one run of tool output. The column used to
+    read `lenh var 6810 | MAT MOT PHAN LENH (EN 2, VI 1) | dong 1/6 | dong nay:
+    mat 1 #Color[0]`, which names the instruction index, an internal verdict
+    slug and two raw counters - true, and unreadable by the person who has to
+    act on it. A translator needs the defect in a sentence and the repair in
+    another; the instruction index is the last thing they need, so it goes last.
+    """
+    return 'LOI: %s\nSUA: %s\n(%s)' % (loi, sua, vi_tri)
 
 
 def diff(en, vi):
@@ -139,7 +211,21 @@ def refused(row):
     are not repeated here; a row that fails one of those is refused for that
     reason instead and is a different problem.
     """
-    return bool(row.vi) and counts(MARKUP_RX, row.vi) != counts(MARKUP_RX, row.en)
+    if not row.vi:
+        return False
+    vi, en = counts(MARKUP_RX, row.vi), counts(MARKUP_RX, row.en)
+    if vi == en:
+        return False
+    # The same exception applyvi.py makes: a line carrying exactly the Japanese
+    # line's commands follows its source and is written. See applyvi.keeps_jp().
+    return not (row.jp and keeps_jp(vi, en, counts(MARKUP_RX, row.jp)))
+
+
+def jp_total(rows):
+    """Commands the Japanese side carries over `rows`, or None if any is missing."""
+    if any(not r.jp for r in rows):
+        return None
+    return sum((counts(CMD_RX, r.jp) for r in rows), collections.Counter())
 
 
 # ------------------------------------------------------------------- reading
@@ -166,14 +252,23 @@ def read_rows(ws):
     return out
 
 
-def box_map(script, delta, sheet):
+def box_map(script, delta, sheet, known=None):
     """([box], {row id: index of its box}) for the text slots of every box.
 
     A box is a maximal run of consecutive `text` instructions - the unit the
     translator re-broke, and the only scope in which a moved command is
     harmless. `reflow.boxes_of()` already knows how to find them.
+
+    `known` is the set of `text` row ids this sheet carries, and the boxes are
+    cut down to it exactly as `applyvi.plan()` cuts them down. That has to
+    match or the two tools disagree: a slot English left empty is a line of the
+    box, so it counts when the sheet has a row for it and must not when it does
+    not.
     """
-    boxes = boxes_of(script, delta, sheet)
+    boxes = boxes_of(script, delta, sheet, keep_blank=known is not None)
+    if known is not None:
+        boxes = [[rid for rid in box if rid in known] for box in boxes]
+        boxes = [box for box in boxes if box]
     where = {rid: bi for bi, rows in enumerate(boxes) for rid in rows}
     return boxes, where
 
@@ -190,27 +285,77 @@ def var_groups(rows):
 
 
 def var_verdict(group):
-    """(verdict, english #NAME count, vietnamese #NAME count) for one command.
+    """(verdict, english command count, vietnamese command count) for one command.
 
-    Counted over the whole command, not per line: inside one version the name
+    Counted over the whole command, not per line: inside one version a command
     may legitimately sit on a different line in Vietnamese than in English.
-    What may not change is how many versions carry a name at all.
+    What may not change is how many the whole thing carries.
+
+    EVERY command counts, not `#NAME[1]` alone. Counting only the name called
+    201/6810 balanced while it drops one half of a `#Color[8]...#Color[0]`
+    pair, which leaves the rest of that version coloured to the end of the box.
+    `#n` stays out, as everywhere else here: merging two lines of one version
+    drops one and changes nothing a player sees.
     """
-    en_n = sum(len(NAME_RX.findall(r.en)) for r in group)
-    vi_n = sum(len(NAME_RX.findall(r.vi)) for r in group)
-    if not en_n:
-        return 'EN khong co #NAME[1]', en_n, vi_n
+    en = sum((counts(CMD_RX, r.en) for r in group), collections.Counter())
+    vi = sum((counts(CMD_RX, r.vi) for r in group), collections.Counter())
+    en_n, vi_n = sum(en.values()), sum(vi.values())
     if any(not r.vi for r in group):
         return 'chua dich het', en_n, vi_n
-    if vi_n == en_n:
+    if en == vi or jp_total(group) == vi:
         return 'can bang', en_n, vi_n
     if vi_n == 0:
         return VAR_LOST, en_n, vi_n
-    return (VAR_PART if vi_n < en_n else VAR_EXTRA), en_n, vi_n
+    if not en_n or vi_n > en_n:
+        return VAR_EXTRA, en_n, vi_n
+    return VAR_PART, en_n, vi_n
+
+
+def named(group):
+    """The name a `#NAME[1]` stands in for in the other version, or ''.
+
+    Worth the trouble because `thay "Ceres" bang #NAME[1]` is an instruction
+    while `thay ten mac dinh bang #NAME[1]` is a riddle.
+
+    Taken as the capitalised word the versions WITHOUT `#NAME[1]` carry and the
+    ones with it do not - the two differ only where the name is, so the
+    difference is the name. Reading the first capitalised word instead answered
+    `St`, off the front of `"St-Stop...! Brother,` in 302/9909.
+    """
+    def caps(lines):
+        return set(re.findall(r'[A-Z][A-Za-z]{2,}', ' '.join(lines)))
+    plain = caps([r.en for r in group if '#NAME[' not in r.en])
+    with_name = caps([r.en for r in group if '#NAME[' in r.en])
+    only = sorted(plain - with_name)
+    return only[0] if len(only) == 1 else ''
+
+
+VAR_LOI = {
+    VAR_LOST: 'Khung nay game luu %d ban thay the nhau, ban dich viet thang '
+              'ten nhan vat o CA %d ban. Ban goc danh mot ban cho #NAME[1] - '
+              'ten nu chinh do nguoi choi tu dat. Nguoi doi ten se van thay '
+              'ten mac dinh tren man hinh.',
+    VAR_PART: 'Khung nay game luu %d ban thay the nhau, va ban dich thieu '
+              'lenh o mot trong so do (%d lenh ben Anh, %d ben Viet). Ban nao '
+              'thieu thi nguoi choi roi vao ban do se mat ten hoac mat doan '
+              'chu doi mau.',
+    VAR_EXTRA: 'Ban dich them lenh so voi ban goc (%d lenh ben Anh, %d ben '
+               'Viet). Neu hai ban dich ra giong het nhau thi game mat kha '
+               'nang phan biet nguoi choi co doi ten hay khong.',
+}
+
+VAR_SUA = {
+    VAR_LOST: 'Moi ban phai la MOT CAU TRON VEN. Giu nguyen ban viet ten '
+              'that, roi o ban con lai thay ten %sbang #NAME[1].',
+    VAR_PART: 'Doi chieu tung ban voi cot B: ban nao ben Anh co lenh thi ben '
+              'Viet cung phai co, dat o dung cho trong cau.',
+    VAR_EXTRA: 'Xem lai co that su can them khong. Neu ban goc phan biet hai '
+               'ban thi ban dich cung phai phan biet.',
+}
 
 
 def pick_var(rows, st):
-    """{row id: note} for every line of every `var` command that lost a name."""
+    """{row id: note} for every line of every `var` command whose commands moved."""
     out = {}
     for ins, group in var_groups(rows).items():
         verdict, en_n, vi_n = var_verdict(group)
@@ -219,11 +364,22 @@ def pick_var(rows, st):
             st['var bo qua (dong)'] += sum(1 for r in group if refused(r))
             continue
         st['var lay'] += 1
-        head = 'lenh var %d | %s (EN %d, VI %d)' % (ins, verdict, en_n, vi_n)
+        # How many versions the command ships: the same line count repeats once
+        # per version, so the whole group divided by the longest repeat.
+        n_ban = max(2, len(group) // max(1, len(set(r.en for r in group))))
+        name = named(group)
+        loi = VAR_LOI[verdict] % ((n_ban, n_ban) if verdict == VAR_LOST
+                                  else (n_ban, en_n, vi_n) if verdict == VAR_PART
+                                  else (en_n, vi_n))
+        sua = VAR_SUA[verdict] % (('"%s" ' % name,) if verdict == VAR_LOST and name
+                                  else ('',) if verdict == VAR_LOST else ())
         for k, r in enumerate(group, start=1):
-            bad = diff(counts(MARKUP_RX, r.en), counts(MARKUP_RX, r.vi))
-            out[r.rid] = '%s | dong %d/%d | %s' % (
-                head, k, len(group), ('dong nay: ' + bad) if bad else 'dong nay khop')
+            bad = malformed(r.vi) or diff(counts(MARKUP_RX, r.en),
+                                          counts(MARKUP_RX, r.vi))
+            where = ('dong %d/%d cua nhom - %s' %
+                     (k, len(group),
+                      'DONG NAY LECH: ' + bad if bad else 'dong nay khop'))
+            out[r.rid] = note(loi, sua, where)
     return out
 
 
@@ -254,17 +410,24 @@ def pick_text(rows, where, boxes, by_id, st):
             en += counts(CMD_RX, b.en)
             vi += counts(CMD_RX, b.vi)
         bad = diff(en, vi)
-        if not bad:
+        if not bad or jp_total(box) == vi:
             st['khung can bang (bo qua)'] += 1
             continue
         st['khung lay'] += 1
         if any(not b.vi for b in box):
             st['khung thieu ban dich'] += 1
-        head = 'khung %d | KHUNG LECH: %s' % (box[0].ins, bad)
+        loi = ('Cong ca khung %d dong nay lai thi ban dich %s so voi ban goc. '
+               '%s' % (len(box), bad, why_of(bad)))
+        sua = ('Doc ca khung roi dat lai lenh cho dung cho trong cau tieng '
+               'Viet. Chuyen lenh sang dong ben canh TRONG CUNG KHUNG thi '
+               'khong sao - cho nay la thieu hoac thua han.')
         for k, b in enumerate(box, start=1):
-            mine = diff(counts(MARKUP_RX, b.en), counts(MARKUP_RX, b.vi))
-            out[b.rid] = '%s | dong %d/%d | %s' % (
-                head, k, len(box), ('dong nay: ' + mine) if mine else 'dong nay khop')
+            mine = malformed(b.vi) or diff(counts(MARKUP_RX, b.en),
+                                           counts(MARKUP_RX, b.vi))
+            out[b.rid] = note(loi, sua, 'dong %d/%d cua khung - %s'
+                              % (k, len(box),
+                                 'DONG NAY LECH: ' + mine if mine
+                                 else 'dong nay khop'))
     return out
 
 
@@ -283,7 +446,37 @@ def pick_single(rows, st):
             st['dong don chi lech #n (bo qua)'] += 1
             continue
         st['dong don lay'] += 1
-        out[r.rid] = 'dong don kind=%s | LECH: %s' % (r.kind, bad)
+        loi = ('Dong nay dung mot minh, khong co khung nao de san se lenh, nen '
+               'ban dich %s la mat han. %s' % (bad, why_of(bad)))
+        sua = ('Dua lenh tro lai cau tieng Viet. Voi kind=name day la TEN '
+               'NGUOI NOI hien tren khung thoai, nen bo #NAME[1] la mat ten '
+               'nguoi choi da dat.')
+        out[r.rid] = note(loi, sua, 'dong le, kind=%s' % r.kind)
+    return out
+
+
+def pick_malformed(rows, st):
+    """{row id: note} for a line whose Vietnamese spells a command wrong.
+
+    These are NOT among the refusals - that is the point of exporting them.
+    `applyvi.py` counts commands it can recognise, and a command written wrong
+    is not one, so the line balances, passes every check and is written into the
+    game. Nothing else in the toolchain looks for them.
+    """
+    out = {}
+    for r in rows:
+        why = malformed(r.vi)
+        if not why:
+            continue
+        st['ma lenh viet sai'] += 1
+        out[r.rid] = note(
+            'Ma lenh trong cau tieng Viet VIET SAI: %s. Game khong nhan ra no '
+            'la lenh nen se in thang ra man hinh nhu chu binh thuong, va tac '
+            'dung cua lenh thi mat. Dong nay KHONG bi tu choi - no da duoc ghi '
+            'vao game roi.' % why,
+            'Viet lai cho dung. Doi chieu cot B (ban Anh) va cot tieng Nhat de '
+            'lay dung dang lenh.',
+            'loi cu phap, khong lien quan den khung hay lenh var')
     return out
 
 
@@ -382,7 +575,6 @@ def readme(st):
         '',
         'Mot ban dai hon mot dong thi chiem nhieu dong lien tiep. Doc cot B se',
         'thay ro: noi dung cua ca lenh lap lai hai lan, chi khac o cho co ten.',
-        'Cot "Ghi chu" ghi lenh var so may va dong nay la dong thu may cua lenh.',
         '',
         'Ca lenh deu duoc xuat ra, khong chi dong hong, vi khong nhin thay ca',
         'hai ban thi khong sua duoc.',
@@ -401,7 +593,30 @@ def readme(st):
         '  - bo mot ve cua cap #Color[8] ... #Color[0]',
         '',
         'Ca khung deu duoc xuat ra chu khong chi dong hong, de sua theo ngu',
-        'canh. Cot "Ghi chu" ghi ca khung thieu gi va dong nao dang lech.',
+        'canh.',
+        '',
+        RULE,
+        '3. MA LENH VIET SAI CU PHAP - LOI DA NAM TRONG GAME ROI',
+        RULE,
+        '',
+        'Loai nay KHONG bi applyvi.py tu choi, va do moi la van de: phep kiem',
+        'chi dem nhung ma lenh no DOC DUOC, nen mot lenh viet sai khong duoc',
+        'tinh la lenh, dong van "can bang", qua het moi phep kiem va da duoc',
+        'ghi vao game.',
+        '',
+        'Hai dong trong ban dich hien tai:',
+        '',
+        '  201 / 6810   #Color[0   -> thieu dau ]',
+        '               Mau khong bao gio duoc dong, chu phia sau doi mau cho',
+        '               den het khung, va chuoi "#Color[0" in thang ra man hinh.',
+        '',
+        '  103 / 4914   #Ruby[Khu Nghien Cuu]   -> thieu tham so thu hai',
+        '               #Ruby la lenh ghi chu doc (furigana), dang dung la',
+        '               #Ruby[chu nen,chu doc]. Ban Nhat dung 605 lan, ban Anh',
+        '               KHONG dung lan nao - nen khong co dong tieng Anh nao de',
+        '               chep dang lenh. Doi chieu cot tieng Nhat:',
+        '                 JP  #Ruby[研究区,セルネヴォル]',
+        '                 VI  #Ruby[Khu Nghien Cuu]      <- thieu ve sau',
         '',
         RULE,
         'CACH DUNG',
@@ -410,10 +625,20 @@ def readme(st):
         'Chi sua cot C (Tieng Viet). Khong sua cot A va cot "EN ID": do la dia',
         'chi cua dong trong file game.',
         '',
+        'Cot "Ghi chu" moi dong viet thanh ba phan:',
+        '  LOI:  sai cai gi, va tren man hinh no hong ra sao',
+        '  SUA:  phai lam gi',
+        '  (...)  dong nay la dong thu may cua khung / cua nhom, va rieng dong',
+        '         nay co lech hay khong',
+        '',
         'Giu dung so ma lenh so voi cot B, dem THEO TUNG DONG:',
         '  #NAME[1]            ten nu chinh do nguoi choi dat',
         '  #Color[8] #Color[0] mo / dong doan chu doi mau, luon di theo cap',
+        '  #Ruby[nen,doc]      ghi chu doc, BAT BUOC co dau phay va hai ve',
         '  #n                  xuong dong (trong o Excel la mot lan xuong hang)',
+        '',
+        'Ngoac vuong phai dong. Thieu mot dau ] la ca lenh hong, va khong phep',
+        'kiem nao bat duoc truoc khi vao game.',
         '',
         'Sheet o day dat ten theo so kich ban giong bang dich chinh, nen ghi',
         'thang vao game duoc:',
@@ -468,12 +693,14 @@ def main():
         notes = {}
         notes.update(pick_var(rows, st))
         notes.update(pick_single(rows, st))
+        notes.update(pick_malformed(rows, st))
         script = Script(data)
         delta = detect_delta(script)
         if delta is None:
             st['sheet khong doc duoc opcode'] += 1
         else:
-            boxes, where = box_map(script, delta, name)
+            known = {r.rid for r in rows if r.kind == 'text'}
+            boxes, where = box_map(script, delta, name, known)
             notes.update(pick_text(rows, where, boxes, by_id, st))
         if notes:
             sheets.append((sheet_name(name),
@@ -491,14 +718,18 @@ def main():
     out.save(a.out)
 
     print('%-34s %s' % ('dong doc duoc', format(st['dong doc duoc'], ',')))
-    print('%-34s %s' % ('applyvi tu choi (markup lech)', format(st['bi tu choi'], ',')))
+    print('%-34s %s  (truoc khi khung go toi)'
+          % ('phep kiem tung dong tu choi', format(st['bi tu choi'], ',')))
     print()
     print('lenh var:')
     for key in sorted(k for k in st if k.startswith('var: ')):
         print('   %-31s %s' % (key[5:], format(st[key], ',')))
     print('   %-31s %s' % ('-> lay ra', format(st['var lay'], ',')))
-    print('   %-31s %s  (lenh can bang #NAME[1])'
+    print('   %-31s %s  (lenh can bang tren toan lenh)'
           % ('dong tu choi KHONG lay', format(st['var bo qua (dong)'], ',')))
+    print()
+    print('%-34s %s  (KHONG bi tu choi - da vao game)'
+          % ('ma lenh viet sai cu phap', format(st['ma lenh viet sai'], ',')))
     print()
     print('khung text / dong le:')
     print('   %-31s %s' % ('khung lech -> lay ra', format(st['khung lay'], ',')))

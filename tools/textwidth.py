@@ -43,6 +43,16 @@ WHAT COUNTS AS ONE LINE
     each is measured on its own. `#Color[k]` draws nothing and is removed.
     `#NAME[1]` expands to a name the player types, which has no fixed width, so
     it is measured as the default heroine name.
+
+    `#Ruby[base,reading]` is furigana: the base sits on the line and the reading
+    is set small above it, so only the base is measured. Counting the command
+    as literal text flagged 14 lines of the translation as overflowing the
+    backlog, by up to 356 units, and not one does - they clear it by 412 to 853
+    measured on the base, and still by 109 or more with the reading laid inline
+    at full size beside it, which is the worst the engine could do with it. The
+    English build never uses `#Ruby`; the Japanese one does, 605 times, and the
+    English executable carries the same `Ruby[` token in the same 20-token set
+    of inline commands, so the parser knows it.
 """
 import os
 import re
@@ -54,6 +64,7 @@ from cpk import CPK                                # noqa: E402
 
 COLOR_RX = re.compile(r'#Color\[\d+\]')
 NAME_RX = re.compile(r'#NAME\[\d+\]')
+RUBY_RX = re.compile(r'#Ruby\[([^\],]*),[^\]]*\]')
 DEFAULT_NAME = 'Ceres'          # what #NAME[1] shows until the player renames
 ADV_FONTS = ('advfont1.ffu', 'advfont2.ffu', 'advfont3.ffu', 'advfont4.ffu')
 
@@ -69,6 +80,7 @@ CEILING = BACKLOG_CEILING
 def display_lines(text):
     """The separate lines a block actually draws, with markup resolved away."""
     t = COLOR_RX.sub('', NAME_RX.sub(DEFAULT_NAME, text or ''))
+    t = RUBY_RX.sub(lambda m: m.group(1), t)
     return t.split('#n')
 
 
