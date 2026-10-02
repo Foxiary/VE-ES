@@ -1,23 +1,27 @@
 # Font/
 
-Font nguồn để render `.ffu`. Thư mục này **gitignored** (37 MB, đa số biến thể
-không dùng) — tải lại từ Google Fonts khi cần.
+Font nguồn để render `.ffu`. Thư mục này **gitignored** (~29 MB) — tải lại từ
+Google Fonts khi cần.
 
-Cả ba đều **SIL Open Font License**, nên phân phối kèm bản dịch được, miễn giữ
-file `OFL.txt` đi kèm.
+Source Serif 4, Newsreader và Open Sans là **SIL Open Font License**, Tinos là
+**Apache 2.0** — cả bốn phân phối kèm bản dịch được, miễn giữ file giấy phép đi
+kèm (`OFL.txt` / `LICENSE.txt`).
 
 | font | dùng cho | lý do |
 |---|---|---|
-| [Newsreader](https://fonts.google.com/specimen/Newsreader) | advfont1, sysfont | serif, khớp mincho |
-| [Source Serif 4](https://fonts.google.com/specimen/Source+Serif+4) | advfont2 | serif nhẹ hơn |
-| [Cabin](https://fonts.google.com/specimen/Cabin) | advfont3, advfont4 | sans, khớp gothic |
+| [Newsreader](https://fonts.google.com/specimen/Newsreader) | sysfont | serif, khớp mincho |
+| [Tinos](https://fonts.google.com/specimen/Tinos) | advfont1 | bản EN dùng Jomolhari (chỉ 48/146 ký tự Việt); Tinos cùng cụm Times |
+| [Source Serif 4](https://fonts.google.com/specimen/Source+Serif+4) | advfont2 | đúng font gốc của bản EN |
+| [Open Sans](https://fonts.google.com/specimen/Open+Sans) | advfont3 (SemiBold), advfont4 (Regular) | advfont3 đúng font gốc; advfont4 thay Sawarabi Gothic (120/146) cho cùng họ |
 
-Giải nén nguyên bộ vào đây, giữ đúng tên thư mục:
+Giải nén vào đây, giữ đúng tên thư mục:
 
 ```
-Font/Newsreader/static/...
-Font/Source_Serif_4/static/...
-Font/Cabin/static/...
+Font/Newsreader/static/Newsreader_24pt-Regular.ttf
+Font/Tinos/Tinos-Regular.ttf
+Font/Source_Serif_4/SourceSerif4-VariableFont_opsz,wght.ttf
+Font/Open_Sans/OpenSans-SemiBold.ttf
+Font/Open_Sans/OpenSans-Regular.ttf
 ```
 
 File cụ thể dùng cho từng `.ffu` khai trong `../fonts.json`.

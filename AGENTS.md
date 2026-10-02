@@ -71,7 +71,8 @@ từ template. Muốn đồng bộ cả kanji thì cần font CJK có tiếng Vi
 
 - **Thoại đã vá xong**: 94.641/96.132 dòng trong `STORY.cpk`, chạy được trên
   Ryujinx. Quy trình ở `DICH.md`.
-- Font: 5 file sinh từ Newsreader / Lora / Cabin. Chiều cao ô **phải bằng
+- Font: 5 file sinh từ Newsreader / Tinos / Source Serif 4 / Open Sans
+  (bảng ở `Font/README.md`). Chiều cao ô **phải bằng
   template** — engine co glyph theo tỉ lệ `88/cell`, để ô phình ra cho vừa dấu
   thanh là chữ nhỏ đi 19%.
 - Còn lại: 851 dòng lệch markup, 531 chưa dịch, 109 tên chương mất khoá, và
