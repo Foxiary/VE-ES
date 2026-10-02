@@ -169,10 +169,14 @@ def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0):
     pad = max(8, guess + 16)
     im = Image.new('L', (pad, H), 0)
     ImageDraw.Draw(im).text((0, y_off), ch, font=s.font, fill=255)
-    # Two combining marks in NFD is exactly the Vietnamese stack - tone over
-    # circumflex, breve or horn. One mark (the Latin-1 set) is left alone.
+    # Two marks ABOVE (combining class 230) is exactly the Vietnamese stack -
+    # tone over circumflex or breve. Counting every combining mark also caught
+    # the horn (216) and the dot below (220): in u+horn+dot the horn is joined
+    # to the body, so the "top band" was the whole letter and it rose off the
+    # baseline. One mark above (the Latin-1 set, and o/u-horn + tone) is left
+    # alone.
     if mark_lift and sum(1 for c in unicodedata.normalize('NFD', ch)
-                         if unicodedata.combining(c)) >= 2:
+                         if unicodedata.combining(c) == 230) >= 2:
         im = _lift_tone_mark(im, pad, H, mark_lift)
     if glow:
         # The stock glyphs are SOFT, and a straight render is not. Down the

@@ -154,8 +154,11 @@ a clipped acute. Nothing is clipped: every Vietnamese glyph in a generated
 believing otherwise.
 
 `ffugen --mark-lift N` is the fix: it raises the topmost ink band of any letter
-whose NFD form carries **two** combining marks, which is exactly the Vietnamese
-stack and leaves the Latin-1 set alone. The cell has ~16 rows of headroom above
+whose NFD form carries **two** combining marks *above* (class 230), which is
+exactly the Vietnamese stack and leaves the Latin-1 set alone. Counting every
+combining mark was wrong: `ự ợ` are base + horn + dot below, the horn is joined
+to the body, so the "topmost band" was the whole letter and it rose 3 rows off
+the baseline, visible in game. The cell has ~16 rows of headroom above
 the tallest stacked lowercase letter. At `--mark-lift 3` the blank averages 3.1
 to 3.5 rows, about 2 px on screen. Going higher starts clamping: capitals like
 `Ế Ổ Ẫ` already sit near the top of the cell, and the lift is capped per glyph
