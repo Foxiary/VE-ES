@@ -77,4 +77,3 @@ từ template. Muốn đồng bộ cả kanji thì cần font CJK có tiếng Vi
   thanh là chữ nhỏ đi 19%.
 - Còn lại: 851 dòng lệch markup, 531 chưa dịch, 109 tên chương mất khoá, và
   ~59 dòng rộng quá khung backlog cần rút gọn.
-- `tools/vnfont.py` là hướng cũ (ghép dấu từ glyph gốc), giữ lại làm đường lui.

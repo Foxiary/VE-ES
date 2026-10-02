@@ -409,8 +409,8 @@ agreed with itself because it used the same wrong key. Compare tolerantly
 
 **A spreadsheet holds real newlines; the game holds `#n`.** Every sheet is
 written with `linebreak.to_sheet()` and must be read back through
-`linebreak.to_game()` — `mksheet`, `glossary`, `checksheet`, `applyvi`,
-`applyen` and `reflow` all do. A reader that skips it sees a source column
+`linebreak.to_game()` — `mksheet`, `glossary`, `checksheet`, `applyvi` and
+`reflow` all do. A reader that skips it sees a source column
 that no longer matches any block and silently applies nothing. The swap is
 lossless because no shipped string contains a raw control character (checked
 over all 97,110 extractable rows) and `#n` is the only command spelled with a
@@ -539,8 +539,8 @@ it.
 
 **Header height out of sync crashes the game.** `0x0A` / `0x0E` is what the
 engine sizes its draw buffer from. Writing 108px glyphs while the header still
-says 88 crashes on text-heavy screens. `ffugen.py` and `vnfont.serialize()`
-both set it; hand edits must too.
+says 88 crashes on text-heavy screens. `ffugen.py` sets it; hand edits
+must too.
 
 **Zeroing the schema block crashes the game.** It sits between the record table
 and the string pool, and an early version of `gbnl.py` padded over it — the
@@ -580,10 +580,10 @@ the template, so Latin rendered even slightly larger or smaller reads as two
 different fonts on one line. `ffugen.match_px` binary-searches the pixel size to
 match; do not hardcode `--px` unless you have a reason.
 
-**Patching `.gstr` in place caps string length.** `tools/patchstr.py` overwrites
-the old slot, so a replacement must be ≤ the original in UTF-8 *bytes* —
-Vietnamese with diacritics is usually longer than English. Use `gbnl.py`, which
-rebuilds the pool and remaps offsets, when the text needs to grow.
+**Patching `.gstr` in place caps string length.** Overwriting the old slot means
+a replacement must be ≤ the original in UTF-8 *bytes* — Vietnamese with
+diacritics is usually longer than English. Use `gbnl.py`, which rebuilds the
+pool and remaps offsets.
 
 ## Tooling
 
@@ -591,12 +591,10 @@ See `tools/README.md`. The short version:
 
 - `ffu.py` — read/write `.ffu`, in-place glyph edits
 - `ffugen.py` — **the main tool**: render a `.ffu` from OTF/TTF
-- `vnfont.py` — older approach, composes diacritics from the stock glyphs
 - `cpk.py` — list / unpack / repack `.cpk`
 - `tid.py` — read `.tid` textures out of GAME.cpk as PNG
 - `exefs.py` — read the executable: NSP → ExeFS → NSO segments → strings
 - `gbnl.py` — read/rebuild `.gbin` and `.gstr` (offsets remapped, text may grow)
-- `patchstr.py` — in-place `.gstr` edits (length-capped)
 - `translate_glossary.py` — the sample translations used to check rendering
 
 The text pipeline, in the order it runs:

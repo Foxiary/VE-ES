@@ -134,36 +134,6 @@ nhau sau khi che các ô chuỗi, hoặc tìm được một cột duy nhất �
 mang cùng tập giá trị để làm khóa. `dbDictionary` ghép theo id số của từ, các
 file còn lại ghép theo chỉ số. Không thỏa cái nào thì để trống, không đoán.
 
-### `applyen.py` — ghi bản dịch vào bản ENG theo cột `EN ID`
-
-```bash
-python applyen.py sheet.xlsx work/story-us out_dir --dry-run
-python applyen.py sheet.xlsx work/story-us out_dir --max-bytes 84 --report qua-dai.csv
-```
-
-Dùng cái này khi bảng dịch **có cột `EN ID`**, vì đó là toạ độ chính xác chứ
-không phải gợi ý: đo trên cả 54 sheet, **95.355** `EN ID` trỏ đúng block có nội
-dung khớp nguyên văn cột D, **0** trỏ sai. Nhờ vậy bỏ được toàn bộ khâu dò nội
-dung, gỡ trùng lặp và dóng cấu trúc mà hai tool kia phải làm.
-
-Cột: `A ID | B Japanese | C Tiếng Việt | D English | E EN ID | F EN Note`.
-Tiêu đề cột B ghi "English" nhưng nội dung là tiếng Nhật — sai từ bảng gốc.
-
-Offset chỉ được tin **sau khi** nội dung block khớp đúng cột D; lệch thì bỏ
-dòng và đếm, không ghi liều. Markup (`#NAME`…) cũng phải khớp block bị đè.
-
-Kết quả trên bản `01009CF01BAC4000`, với `--relink` + `filltitles.py` (xem
-dưới): **102.888 / 103.382** dòng được ghi (99,5%). Bỏ qua: 151 chưa dịch, 322
-lệch markup, 21 khung không cân lệnh.
-
-Con số cũ ghi ở đây — 94.497 dòng, kèm "7.208 dòng chỉ có bên Nhật nên build ENG
-không có" — **sai ở vế giải thích**. Hai build chạy cùng một kịch bản: 50 trong
-54 file có y hệt số lệnh, bốn file còn lại chênh một tới ba lệnh. Chỗ tiếng Anh
-cần ít dòng hơn, người bản địa hóa **để trống block chứ không xóa lệnh**, nên ô
-vẫn còn đó — xem `relinkjp.py`.
-
-`--max-bytes 84` dựng bản dè dặt, bỏ 1.305 câu vượt trần (xem mục dưới).
-
 #### `--merge` — nạp bản dịch có sẵn vào workbook
 
 ```bash
@@ -230,7 +200,6 @@ vật bảng ghi rõ còn build vẫn để `？？？`, hoặc một động t�
 - `stcm2l.py` — đọc / dựng lại `.DAT` (STCM2L); chạy trực tiếp để tự kiểm tra file
 - `checksheet.py` — đối chiếu bảng dịch với `.DAT`, xem bảng có đúng build không
 - `applyvi.py` — ghi workbook của `mksheet.py` vào `.DAT` theo ID (**ưu tiên dùng**)
-- `applyen.py` — ghi thẳng từ bảng neo bản Nhật, theo cột `EN ID`
 - `applystory.py` — ghi bản dịch, khớp theo nội dung, khi bảng không có `EN ID`
 - `portjp2us.py` — chuyển bản dịch neo theo bản Nhật sang build khác
 - `relinkjp.py` — dựng lại cột `EN ID` của bảng neo bản Nhật từ chính hai build
@@ -405,7 +374,7 @@ kích thước với header.
 **Vá chỗ này là việc khác.** Mod CPK không với tới file thực thi;
 Ryujinx nạp nó từ `mods/contents/<title id>/<tên>/exefs/`. Và `.rodata`
 xếp khít không có chỗ trống, nên câu thay phải **vừa đúng số byte cũ**
-— cùng cái trần `patchstr.py` đang chịu, và khá chật với tiếng Việt.
+— khá chật với tiếng Việt.
 
 ### `tid.py` — đọc texture `.tid` trong GAME.cpk
 
@@ -486,8 +455,8 @@ markup; dòng dịch trùng bản gốc bị bỏ qua. Đóng gói lại rồi s
 Trong game, ngắt dòng là `#n`. Trong ô Excel thì nó thành một cục chữ dài,
 người dịch muốn ngắt lại phải đếm ký tự không nhìn thấy. Nên lúc ghi sheet,
 `to_sheet()` đổi `#n` thành xuống hàng thật; lúc đọc sheet, `to_game()` đổi
-ngược lại. `mksheet.py`, `glossary.py`, `checksheet.py`, `applyvi.py`,
-`applyen.py` và `reflow.py` đều đã nối sẵn.
+ngược lại. `mksheet.py`, `glossary.py`, `checksheet.py`, `applyvi.py` và
+`reflow.py` đều đã nối sẵn.
 
 Đổi qua đổi lại **không mất gì**, và điều đó được **đếm trước khi dùng**:
 
@@ -546,28 +515,6 @@ python ffu.py font.ffu "Aáàả"   # in metric từng glyph
 Cũng là thư viện: `load()`, `index()`, `bitmap()`, `to_png()`, `build()`.
 `build()` giữ nguyên chiều cao ô nên chỉ hợp sửa glyph lẻ — đổi chiều cao thì
 dùng `ffugen.py`.
-
-### `patchstr.py` — sửa `.gstr` tại chỗ
-
-Ghi đè đúng ô cũ, nên chuỗi mới phải **≤ chuỗi cũ tính theo byte UTF-8**. Nhanh
-và không đụng bảng offset, nhưng tiếng Việt có dấu thường dài hơn tiếng Anh nên
-phần lớn trường hợp phải dùng `gbnl.py`.
-
-### `vnfont.py` — ghép dấu từ glyph gốc
-
-Hướng làm **cũ**, giữ lại làm đường lui. Nó không render từ font ngoài mà cắt
-dấu từ chính glyph của game rồi chồng lên thân chữ:
-
-| dấu | nguồn |
-|---|---|
-| huyền, sắc, ngã, mũ | `à á ã â` và bản hoa |
-| breve (`ă`) | cung đáy chữ `o` |
-| nặng | chấm của `.` |
-| horn (`ơ ư`) | dấu nháy cong `’` |
-| hỏi | **dấu phẩy lật ngang** |
-
-Ưu điểm là giữ 100% nét gốc; nhược điểm là dấu ghép nhìn không đẹp bằng font
-dựng sẵn. `draw_hook()` bên trong chỉ là đường lui cho font không có dấu phẩy.
 
 ### `translate_glossary.py` — bản dịch mẫu
 
