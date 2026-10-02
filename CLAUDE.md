@@ -139,6 +139,25 @@ height above baseline per glyph, normalised by cap height. sysfont is the
 exception that proves it: `adv - ink` runs 4–8 there, because that file still
 has its original bearings.
 
+### The ADV glyphs carry a dark outline
+
+The advfont palette is not a coverage ramp. Indices 1-3 are **black** at
+27/60/93% opacity, 4 is opaque near-black `#131313`, 5-15 run grey to white:
+a white letter on a black border. Stock glyphs use it exactly so - 2 px of
+index 4 and a 1 px fringe of 1-3 around every stroke, 33% of all Latin ink on
+index 4 - and the cap height of 52 includes that border; the white core is 47.
+sysfont's palette is white at rising alpha and draws no outline.
+
+A plain render quantised linearly lands 1% of its ink on index 4, so it has no
+border at all. `ffugen --stroke 2` draws one: solid 2 px out from the 50%
+contour, then 1 px soft, quantised to the nearest palette entry. That gives
+30% on index 4 and a 51-row `H` at the current `px`, so no resize is needed.
+Dilating the glowed coverage instead of the hardened shape came out a pixel
+thin and grey (9% on index 4). Each glyph grows by `2N` columns of advance so
+one letter's border never falls on the next letter's core; a sentence runs
+~14% wider, still under stock. The run `2 4 4 4 4 6 a d f f f` that once
+justified `--glow` as "the stock soft ramp" is this outline.
+
 ### The engine draws the ADV font at 0.588
 
 Measured off a screenshot: the word `chống` is 182 px wide in `advfont1.ffu` and

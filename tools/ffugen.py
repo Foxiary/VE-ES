@@ -150,12 +150,73 @@ def _lift_tone_mark(im, pad, H, lift):
     return im
 
 
-def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0):
+def stroke_margin(stroke):
+    """Whole pixels an outline of radius `stroke` reaches past the ink."""
+    import math
+    return int(math.ceil(stroke)) if stroke > 0 else 0
+
+
+def outline_palette(pal):
+    """Check that a palette can draw a dark outline, and return it as
+    premultiplied (value, alpha) pairs in 0..1.
+
+    The ADV fonts' palette is not a coverage ramp: indices 1-3 are BLACK at
+    27/60/93% opacity, 4 is opaque near-black and 5-15 run opaque grey to white.
+    That is a white letter on a black border, and the stock glyphs use it so -
+    a 2 px band of index 4 and a 1 px fringe of 1-3 round every stroke. sysfont's
+    palette is white at rising alpha and has no dark entry, so it cannot
+    outline anything.
+    """
+    out = [((r + g + b) / 765.0 * a / 255.0, a / 255.0) for r, g, b, a in pal]
+    if not any(al > 0.9 and v < 0.2 for v, al in out):
+        raise SystemExit('--stroke needs a palette with a dark opaque entry; '
+                         'this template has none (sysfont-style alpha ramp)')
+    return out
+
+
+def _stroke(im, stroke, pal):
+    """Outline the coverage in `im` and quantise it to palette indices.
+
+    The outline is solid out to `stroke` px past the letter's 50% contour and
+    fades over one more pixel, drawn black under it: alpha = c + o(1 - c),
+    premultiplied value = c. Each pixel takes the palette entry nearest that
+    pair, alpha weighted double so a solid border lands on opaque near-black
+    (index 4, as stock does) rather than on 93% black.
+    """
+    import math
+    import numpy as np
+    c = np.asarray(im, dtype=np.float32) / 255.0
+    H, W = c.shape
+    m = stroke_margin(stroke) + 1
+    # Dilate the hardened shape, not the coverage: dilating a glowed edge
+    # carries its partial values outward and the border comes out grey and a
+    # pixel thin - 9% of ink on index 4 against stock's 33%.
+    src = np.pad(np.minimum(1.0, 2.0 * c), m)
+    o = np.zeros_like(c)
+    for dy in range(-m, m + 1):
+        for dx in range(-m, m + 1):
+            w = min(1.0, max(0.0, stroke + 1.0 - math.hypot(dx, dy)))
+            if w > 0:
+                o = np.maximum(o, w * src[m + dy:m + dy + H, m + dx:m + dx + W])
+    a = c + o * (1.0 - c)
+    pv = np.array([p[0] for p in pal], dtype=np.float32)
+    pa = np.array([p[1] for p in pal], dtype=np.float32)
+    d = (c[..., None] - pv) ** 2 + (2.0 * (a[..., None] - pa)) ** 2
+    return d.argmin(axis=-1).astype(np.uint8)
+
+
+def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0,
+           stroke=0.0, palette=None):
     """Return (advance, width, rows), or None. rows = list[list[0..15]].
 
     The glyph is spaced by its own typeface, plus `tracking` columns. See the
     two comments below for what that is and for two spacing rules tried here
     that were wrong.
+
+    With `stroke`, the letter gets a dark outline of that radius in pixels,
+    quantised against `palette` (see outline_palette()). The outline is drawn
+    inside the glyph's own advance, which grows by the margin on both sides,
+    because stock glyphs never let one letter's border fall on the next one.
     """
     import unicodedata
     from PIL import Image, ImageDraw
@@ -163,12 +224,13 @@ def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0):
     if s is None:
         return None
     bb = s.font.getbbox(ch)
+    ox = stroke_margin(stroke)
     # Draw into a scratch wide enough for the ink wherever the typeface puts it,
     # then find where the ink really is; the source metrics are only a hint.
     guess = max(int(round(s.font.getlength(ch))), bb[2] if bb else 0)
-    pad = max(8, guess + 16)
+    pad = max(8, guess + 16 + 2 * ox)
     im = Image.new('L', (pad, H), 0)
-    ImageDraw.Draw(im).text((0, y_off), ch, font=s.font, fill=255)
+    ImageDraw.Draw(im).text((ox, y_off), ch, font=s.font, fill=255)
     # Two marks ABOVE (combining class 230) is exactly the Vietnamese stack -
     # tone over circumflex or breve. Counting every combining mark also caught
     # the horn (216) and the dot below (220): in u+horn+dot the horn is joined
@@ -179,23 +241,23 @@ def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0):
                          if unicodedata.combining(c) == 230) >= 2:
         im = _lift_tone_mark(im, pad, H, mark_lift)
     if glow:
-        # The stock glyphs are SOFT, and a straight render is not. Down the
-        # middle of advfont1's 'o' the game goes 2 4 4 4 4 6 a d f f f, four to
-        # five pixels of ramp on each side of the stroke, where PIL at the same
-        # size gives 1 8 f - two pixels and done. Quantising to 4bpp then turns
-        # that hard edge into visible stair-stepping, which is what reads as
-        # rough next to the specimen. Blurring the coverage before it is
-        # quantised reproduces the ramp; it widens the glyph slightly, the same
-        # way the stock one is wider than its own outline.
+        # A straight render has a hard edge, and quantising it to 4bpp
+        # stair-steps. Blurring the coverage first softens that. This was once
+        # justified by the stock 'o' reading 2 4 4 4 4 6 a d f f f, taken for a
+        # five-pixel soft ramp - but in the ADV palette 1-4 are black, so that
+        # run is the stock glyph's dark OUTLINE, which is what `stroke` draws.
         from PIL import ImageFilter
         im = im.filter(ImageFilter.GaussianBlur(glow))
 
-    px = list(im.getdata())
+    # Outline last: the lift needs the blank row between the marks to find
+    # them, and the outline is what fills it in.
+    idx = _stroke(im, stroke, palette).ravel().tolist() if stroke else None
+    px = idx if stroke else list(im.getdata())
     cols = [x for x in range(pad)
             if any(px[y * pad + x] for y in range(H))]
 
     if not cols:                     # space, or a glyph that draws nothing
-        adv = max(1, int(round(s.font.getlength(ch))) + tracking)
+        adv = max(1, int(round(s.font.getlength(ch))) + tracking + 2 * ox)
         w = max(8, ((adv + 7) // 8) * 8)
         return adv, w, [[0] * w for _ in range(H)]
 
@@ -224,9 +286,10 @@ def render(chain, ch, H, y_off, tracking=0, glow=0.0, mark_lift=0):
     # Latin typefaces ARE narrower than the game's mincho at the same cap
     # height, which tracking cannot fix without distorting the typeface.
     hi = cols[-1]
-    adv = max(1, int(round(s.font.getlength(ch))) + tracking)
+    adv = max(1, int(round(s.font.getlength(ch))) + tracking + 2 * ox)
     w = max(8, ((max(adv, hi + 1) + 7) // 8) * 8)
-    rows = [[(px[y * pad + x] + 8) // 17 if x <= hi else 0
+    q = (lambda v: v) if stroke else (lambda v: (v + 8) // 17)
+    rows = [[q(px[y * pad + x]) if x <= hi else 0
              for x in range(w)] for y in range(H)]
     return adv, w, rows
 
@@ -290,8 +353,9 @@ def pack(rows):
 
 
 def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
-          tracking=0, space_ratio=0.0, glow=0.0, mark_lift=0):
+          tracking=0, space_ratio=0.0, glow=0.0, mark_lift=0, stroke=0.0):
     """Build a new .ffu from rendered and template bitmaps."""
+    palette = outline_palette(tpl.palettes[0]) if stroke else None
     base_old = baseline_of(tpl)
     shift = base_new - base_old          # shift old glyphs to the new baseline
 
@@ -312,7 +376,8 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
     entries, order = [], sorted(chars, key=FFU.u8i)
     n_new = n_kept = n_skip = 0
     for ch in order:
-        r = render(chain, ch, H, y_off, tracking, glow, mark_lift)
+        r = render(chain, ch, H, y_off, tracking, glow, mark_lift,
+                   stroke, palette)
         if r is not None:
             adv, w, rows = r
             entries.append((ch, adv, H, pack(rows)))
@@ -412,6 +477,11 @@ def main():
                     help='raise the tone mark of doubly-accented Vietnamese '
                          'letters by this many rows, so the pair survives the '
                          'engine scaling the ADV font down to 0.588')
+    ap.add_argument('--stroke', type=float, default=0.0,
+                    help='draw a dark outline of this radius in pixels around '
+                         'every rendered glyph, as the stock ADV fonts have: solid '
+                         'for N px, then a 1 px soft edge. 2 matches them. Needs a '
+                         'template whose palette has a dark entry - not sysfont')
     ap.add_argument('--tracking', type=int, default=0,
                     help='extra columns added to every advance; small cells lose '
                          'the source font side bearings to rounding, so the stock '
@@ -453,8 +523,9 @@ def main():
         chars.update(VN_CHARS)
 
     lo, hi = measure(chain, chars)
-    H = (hi - lo) + 2 * a.pad
-    y_off = a.pad - lo                    # PIL draw origin (y=0 is the ascender line)
+    ox = stroke_margin(a.stroke)          # the outline reaches past the ink
+    H = (hi - lo) + 2 * a.pad + 2 * ox
+    y_off = a.pad + ox - lo                    # PIL draw origin (y=0 is the ascender line)
     if a.cell:
         # Pin the baseline to where the template puts it and cut the cell to the
         # requested height. Letters keep their position and only what sticks out
@@ -473,7 +544,7 @@ def main():
         lower = [c for c in VN_CHARS if not c.isupper()]
         lower += list('abcdefghijklmnopqrstuvwxyz')
         lo_ink, hi_ink = measure(chain, lower)
-        overflow = (y_off + hi_ink) - (H - 1)
+        overflow = (y_off + hi_ink + ox) - (H - 1)
         if overflow > 0:
             y_off -= overflow
             print('chan chu : day len %d hang de duoi chu khong bi cat' % overflow)
@@ -485,7 +556,7 @@ def main():
 
     data = build(tpl, chain, H, y_off, base_new, add_vn=not a.no_vn,
                  tracking=a.tracking, space_ratio=a.space_ratio,
-                 glow=a.glow, mark_lift=a.mark_lift)
+                 glow=a.glow, mark_lift=a.mark_lift, stroke=a.stroke)
     with open(a.out, 'wb') as fh:
         fh.write(data)
     print('-> %s (%s byte)' % (a.out, format(len(data), ',')))

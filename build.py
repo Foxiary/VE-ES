@@ -77,6 +77,7 @@ FONT_FLAGS = {
     'pad': '--pad',
     'tracking': '--tracking',
     'mark_lift': '--mark-lift',
+    'stroke': '--stroke',
     'match_char': '--match-char',
     'space_ratio': '--space-ratio',
 }

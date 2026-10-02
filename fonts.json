@@ -19,7 +19,8 @@
       "cell": 88,
       "px": 75,
       "glow": 0.4,
-      "mark_lift": 3
+      "mark_lift": 3,
+      "stroke": 2
     },
     "window/font/advfont2.ffu": {
       "style": "mincho, light",
@@ -28,7 +29,8 @@
       "cell": 88,
       "px": 67,
       "glow": 0.4,
-      "mark_lift": 3
+      "mark_lift": 3,
+      "stroke": 2
     },
     "window/font/advfont3.ffu": {
       "style": "gothic, heavy",
@@ -37,7 +39,8 @@
       "cell": 88,
       "px": 65,
       "glow": 0.4,
-      "mark_lift": 3
+      "mark_lift": 3,
+      "stroke": 2
     },
     "window/font/advfont4.ffu": {
       "style": "gothic, light",
@@ -46,7 +49,8 @@
       "cell": 88,
       "px": 65,
       "glow": 0.4,
-      "mark_lift": 3
+      "mark_lift": 3,
+      "stroke": 2
     }
   },
   "text": [

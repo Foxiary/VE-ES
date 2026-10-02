@@ -33,6 +33,14 @@ trông như bị cắt. Chỉ tác động lên chữ mà dạng NFD có ≥2 co
 để không đẩy mực ra ngoài ô; 3 là mức lớn nhất mà chưa chữ thường nào bị kẹp.
 Chi tiết ở `../CLAUDE.md`.
 
+`--stroke N` vẽ **viền tối** quanh chữ: đặc `N` px tính từ mép chữ, thêm 1 px
+mờ dần. Font ADV gốc có sẵn viền này — palette của nó không phải dải độ phủ mà
+là chữ trắng trên viền đen (index 1–3 đen trong suốt dần, 4 đen đặc, 5–15 xám
+tới trắng). `--stroke 2` khớp bản gốc: index 4 chiếm 30% điểm mực (gốc 33%),
+chữ `H` cao 51 hàng (gốc 52). Mỗi chữ rộng thêm `2×N` px nên câu dài ra ~14%
+— đo lại bề rộng bằng `textwidth.py` trước khi bật. Chỉ dùng cho advfont1–4:
+palette của sysfont không có màu tối, tool sẽ từ chối.
+
 ### `cpk.py` — bung / đóng gói `.cpk`
 
 ```bash
