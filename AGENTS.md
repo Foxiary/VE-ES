@@ -17,6 +17,7 @@ fonts.json                   font nào render file .ffu nào
 build.py                     một lệnh: bung → render → vá text → đóng gói → cài
 DICH.md                      quy trình đưa bản dịch vào game
 tools/                       thư viện + script, xem tools/README.md
+desktop/                     ứng dụng Electron cho bộ công cụ, xem desktop/README.md
 work/                        trung gian (gitignored): work/stock là template bung từ CPK
 dist/                        SYSTEM.cpk đã build (gitignored, ~460 MB)
 ```

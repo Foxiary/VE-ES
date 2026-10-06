@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+  <title>VE-ES Desktop</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand"><div class="brand-mark">V<span>E</span></div><div><strong>VE-ES</strong><small>DESKTOP STUDIO</small></div></div>
+      <div class="rail-label">WORKSPACE</div>
+      <button class="workspace" id="workspace-button"><span class="workspace-icon">⌁</span><span class="workspace-text"><strong id="workspace-name">Loading…</strong><small id="workspace-path"></small></span><span class="chevron">›</span></button>
+      <button class="rail-link" id="open-folder"><span>▣</span> Open project folder</button>
+      <div class="rail-label tools-label">TOOL GROUPS</div>
+      <nav id="groups"></nav>
+      <div class="rail-bottom">
+        <button class="rail-link" id="docs-button"><span>◇</span> Source documentation</button>
+        <button class="rail-link" id="python-button"><span>⌘</span> Python environment</button>
+        <button class="rail-link" id="check-updates"><span>↻</span> Check updates</button>
+        <div class="source-note">Powered by the original VE-ES Python tools.<br>Game assets are supplied by you.</div>
+      </div>
+    </aside>
+    <section class="browser-pane">
+      <div class="eyebrow">OPERATIONS</div>
+      <h1 id="group-title">Build</h1>
+      <p id="group-subtitle">Choose a tool to configure a run.</p>
+      <div class="search-wrap"><span>⌕</span><input id="search" type="search" placeholder="Search all tools…" aria-label="Search tools"></div>
+      <div id="tool-list" class="tool-list"></div>
+      <div class="browser-footer"><strong id="tool-count"></strong><span>commands available</span></div>
+    </section>
+    <main class="main-pane">
+      <header class="main-header"><div><div class="eyebrow" id="breadcrumb">BUILD / COMMAND</div><h2 id="tool-title">Build mod</h2><p id="tool-description"></p></div><div id="python-status" class="env-pill">Checking Python</div></header>
+      <div id="update-banner" class="update-banner hidden" role="status"><div><strong id="update-title"></strong><p id="update-message"></p></div><div class="update-actions"><button id="update-open" class="update-primary hidden">View changes ↗</button><button id="update-dismiss" class="update-secondary">Dismiss</button></div></div>
+      <div id="notice" class="notice hidden"></div>
+      <section class="form-section">
+        <div class="section-heading"><span>01</span><h3>Configuration</h3><p>Paths can be absolute or relative to the project folder.</p></div>
+        <form id="tool-form"><div id="form-fields" class="form-fields"></div></form>
+      </section>
+      <section class="run-section"><div><strong>Ready to run</strong><small id="run-hint">Commands use your selected Python and project folder.</small></div><div class="run-buttons"><button id="cancel-button" class="secondary" disabled>Stop</button><button id="run-button" class="primary">Run tool <span>↗</span></button></div></section>
+      <section class="console-section"><div class="console-header"><div><span class="console-dot"></span><strong>Run log</strong><span id="run-status">No run yet</span></div><button id="clear-log" title="Clear log">Clear</button></div><pre id="log" aria-live="polite">Select a tool, enter its inputs, then run it. Output will appear here.</pre></section>
+    </main>
+  </div>
+  <dialog id="info-dialog"><div class="dialog-head"><h2 id="dialog-title"></h2><button id="dialog-close" aria-label="Close">×</button></div><div id="dialog-body"></div></dialog>
+  <script src="renderer.js"></script>
+  <script src="update-ui.js"></script>
+</body>
+</html>
