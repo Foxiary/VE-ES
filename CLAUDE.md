@@ -185,6 +185,18 @@ so nothing is pushed out of it. Letters where the tone mark is the only mark on
 top — `ớ ờ ứ ừ` and friends, horn at the side — are skipped, having nothing to
 be confused with.
 
+### Japanese punctuation is drawn with Latin glyphs
+
+Translators type `！？～。「」` out of habit - 534 `！` and 321 `？` in the
+v0.1.3 script. No Latin face carries those code points, so they used to keep
+the template's kana-sized bitmap (advance 88 in advfont) and stood out taller
+and wider than the line around them. `ffugen` now renders each one with its
+Latin alias (`PUNCTUATION_ALIASES`, ported from FFU-Studio) **at the original
+code point**, so no text changes. Quotes go to curly `“ ”`, `― ─` to `—` where
+the face lacks them, `… ‥` always to dots. `U+3000` is left alone: English uses
+it in padding slots. `--no-normalize-punctuation` turns it off and rebuilds
+bit-identical to before.
+
 ## Data files: `.gbin` (GBNL) and `.gstr` (GSTL)
 
 `tools/gbnl.py`. Same shape, different magic placement: GSTL puts the header at
