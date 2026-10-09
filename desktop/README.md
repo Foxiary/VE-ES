@@ -1,6 +1,6 @@
 # VE-ES Desktop
 
-Ứng dụng Electron cho bộ công cụ [VE-ES](https://github.com/Foxiary/VE-ES). Giao diện cung cấp biểu mẫu, chọn tệp, nhật ký trực tiếp và nút dừng cho 34 thao tác dòng lệnh hiện có. Bản này chứa `ffugen.py` ở commit `019ccce`, gồm tùy chọn viền tối `--stroke`.
+Ứng dụng Electron cho bộ công cụ [VE-ES](https://github.com/Foxiary/VE-ES). Giao diện cung cấp biểu mẫu, chọn tệp, nhật ký trực tiếp và nút dừng cho 34 thao tác dòng lệnh hiện có. Bản này chứa `ffugen.py` ở commit `6f8e98d`: viền tối `--stroke`, và dấu câu tiếng Nhật (`？！。「」…`) được vẽ bằng glyph Latin của font nguồn (tắt bằng `--no-normalize-punctuation`).
 
 Ứng dụng không chứa dữ liệu game, font, bảng dịch hoặc khóa. Khi chọn một thư mục dự án, ứng dụng chép các script, `build.py`, `fonts.json` và tài liệu nguồn còn thiếu vào đó. Tệp người dùng đã sửa được giữ nguyên.
 
@@ -33,4 +33,4 @@ Mỗi thao tác chạy script Python gốc với danh sách tham số, không qu
 
 Khi khởi động, ứng dụng chỉ cập nhật script và cấu hình trong workspace nếu chúng còn khớp bản nguồn được đóng gói trước đó. Tệp người dùng tự sửa được giữ nguyên. Script đã bị bỏ khỏi bản nguồn có thể còn trong workspace cũ nhưng không xuất hiện trong danh sách công cụ.
 
-Ảnh chụp mã nguồn: [Foxiary/VE-ES commit `019ccce`](https://github.com/Foxiary/VE-ES/commit/019ccceaf78e4862519e4164e9e0d317da5d745b), lấy ngày 3 tháng 10 năm 2026.
+Ảnh chụp mã nguồn: [Foxiary/VE-ES commit `6f8e98d`](https://github.com/Foxiary/VE-ES/commit/6f8e98d1641f783c02cdeac5e350f42f25ff8c4c), lấy ngày 9 tháng 10 năm 2026.

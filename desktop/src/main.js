@@ -11,7 +11,7 @@ let currentRun = null;
 let settings;
 let lastUpdate = null;
 let updateRequest = null;
-const SOURCE_COMMIT = '019ccceaf78e4862519e4164e9e0d317da5d745b';
+const SOURCE_COMMIT = '6f8e98d1641f783c02cdeac5e350f42f25ff8c4c';
 const byId = new Map(tools.map(tool => [tool.id, tool]));
 
 function settingsPath() { return path.join(app.getPath('userData'), 'settings.json'); }

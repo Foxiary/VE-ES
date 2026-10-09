@@ -1,6 +1,6 @@
 {
   "name": "ve-es-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Desktop interface for the VE-ES translation and font toolkit",
   "main": "src/main.js",
