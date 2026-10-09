@@ -30,6 +30,7 @@ COMMON PITFALLS (verified on Virche Evermore)
 """
 import argparse
 import os
+import string
 import struct
 import sys
 
@@ -46,6 +47,48 @@ _VN = ('A\u00c0\u00c1\u1ea2\u00c3\u1ea0\u0102\u1eb0\u1eae\u1eb2\u1eb4\u1eb6'
        'U\u00d9\u00da\u1ee6\u0168\u1ee4\u01af\u1eea\u1ee8\u1eec\u1eee\u1ef0'
        'Y\u1ef2\u00dd\u1ef6\u1ef8\u1ef4\u0110')
 VN_CHARS = [c for ch in _VN for c in (ch, ch.lower())]
+
+# Japanese punctuation drawn with Latin glyphs, under its own character code.
+# Translators type ！？～。 out of habit, and with no Latin face carrying them
+# those slots keep the template's full-width kana-sized bitmap: taller and wider
+# than the Vietnamese around it. Aliasing in the font fixes every line at once
+# without touching text. Only punctuation is aliased - a blanket NFKC would also
+# rewrite full-width letters and digits. Ported from FFU-Studio's engine.
+#   U+3000 is left alone: English fills padding slots with it, and its width is
+#   the one thing those slots are for.
+#   Quotes go to curly ones, as the translation already uses them, and both
+#   dash forms to an em dash, which is what a doubled one stands for.
+PUNCTUATION_ALIASES = {chr(ord(ch) + 0xfee0): ch for ch in string.punctuation}
+PUNCTUATION_ALIASES.update({
+    '、': ',', '。': '.', '・': '·',
+    '「': '“', '」': '”', '『': '“', '』': '”',
+    '〝': '“', '〞': '”', '〟': '”',
+    '〈': '<', '〉': '>', '《': '<', '》': '>',
+    '【': '[', '】': ']', '〔': '[', '〕': ']',
+    '〖': '[', '〗': ']', '〘': '[', '〙': ']',
+    '〚': '[', '〛': ']',
+    '〜': '~', '―': '—', '─': '—',
+    '…': '...', '‥': '..',
+    '‼': '!!', '⁇': '??', '⁈': '?!', '⁉': '!?',
+})
+ELLIPSES = ('…', '‥')
+
+
+def source_text(chain, ch, normalize_punctuation=True):
+    """The text to draw for `ch`: its Latin alias if the chain has one.
+
+    A character the chain already draws at Latin width - the dashes, in every
+    face shipped here - keeps its own designed glyph; only a full-width one, or
+    one no face carries, is replaced. The ellipses are the exception and always
+    become dots, so a line reads the same whichever form the translator typed.
+    """
+    import unicodedata
+    target = PUNCTUATION_ALIASES.get(ch) if normalize_punctuation else None
+    if target is None or chain.pick(target) is None:
+        return ch
+    if ch not in ELLIPSES and unicodedata.east_asian_width(ch) not in 'WF'             and chain.pick(ch):
+        return ch
+    return target
 
 
 # --------------------------------------------------------------- font chain
@@ -87,17 +130,19 @@ class Chain:
 
     def pick(self, ch):
         for s in self.sources:
-            if s.has(ch):
+            # An alias such as '...' must come from one typeface.
+            if all(s.has(part) for part in ch):
                 return s
         return None
 
 
 # ------------------------------------------------------------------ rendering
 
-def measure(chain, chars):
+def measure(chain, chars, normalize_punctuation=False):
     """Compute shared (ymin, ymax), measured from ascender = 0."""
     lo, hi = 10 ** 6, -10 ** 6
     for ch in chars:
+        ch = source_text(chain, ch, normalize_punctuation)
         s = chain.pick(ch)
         if s is None:
             continue
@@ -353,7 +398,8 @@ def pack(rows):
 
 
 def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
-          tracking=0, space_ratio=0.0, glow=0.0, mark_lift=0, stroke=0.0):
+          tracking=0, space_ratio=0.0, glow=0.0, mark_lift=0, stroke=0.0,
+          normalize_punctuation=True):
     """Build a new .ffu from rendered and template bitmaps."""
     palette = outline_palette(tpl.palettes[0]) if stroke else None
     base_old = baseline_of(tpl)
@@ -372,16 +418,25 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
     if add_vn:
         for ch in VN_CHARS:
             chars.setdefault(ch, None)
+    if normalize_punctuation:
+        for ch in PUNCTUATION_ALIASES:
+            chars.setdefault(ch, None)
 
     entries, order = [], sorted(chars, key=FFU.u8i)
     n_new = n_kept = n_skip = 0
+    aliased, missing = [], []
     for ch in order:
-        r = render(chain, ch, H, y_off, tracking, glow, mark_lift,
+        text = source_text(chain, ch, normalize_punctuation)
+        if normalize_punctuation and ch in PUNCTUATION_ALIASES and text == ch                 and chain.pick(ch) is None:
+            missing.append(ch)
+        r = render(chain, text, H, y_off, tracking, glow, mark_lift,
                    stroke, palette)
         if r is not None:
             adv, w, rows = r
             entries.append((ch, adv, H, pack(rows)))
             n_new += 1
+            if text != ch:
+                aliased.append(ch)
             continue
         # Missing from fonts -> keep the template bitmap.
         gi = chars[ch]
@@ -415,6 +470,11 @@ def build(tpl, chain, H, y_off, base_new, add_vn=True, verbose=True,
     if verbose:
         print('  rendered: %d | kept from template: %d | skipped: %d'
               % (n_new, n_kept, n_skip))
+        if normalize_punctuation:
+            print('  Japanese punctuation drawn as Latin: %d' % len(aliased))
+            if missing:
+                print('  WARNING: no Latin equivalent in the font chain for %s'
+                      % ' '.join('U+%04X' % ord(c) for c in missing))
 
     # range table: merge consecutive characters
     ranges, gtab, bmp = [], bytearray(), bytearray()
@@ -486,6 +546,10 @@ def main():
                     help='extra columns added to every advance; small cells lose '
                          'the source font side bearings to rounding, so the stock '
                          'sysfont spacing needs about 5 put back')
+    ap.add_argument('--no-normalize-punctuation', action='store_true',
+                    help='keep the template bitmaps for Japanese punctuation; by '
+                         'default ？！。「」… and the rest are drawn with the '
+                         'Latin glyph at their own character code')
     ap.add_argument('--no-vn', action='store_true',
                     help='do not add the Vietnamese charset')
     a = ap.parse_args()
@@ -521,8 +585,11 @@ def main():
                 pass
     if not a.no_vn:
         chars.update(VN_CHARS)
+    norm = not a.no_normalize_punctuation
+    if norm:
+        chars.update(PUNCTUATION_ALIASES)
 
-    lo, hi = measure(chain, chars)
+    lo, hi = measure(chain, chars, norm)
     ox = stroke_margin(a.stroke)          # the outline reaches past the ink
     H = (hi - lo) + 2 * a.pad + 2 * ox
     y_off = a.pad + ox - lo                    # PIL draw origin (y=0 is the ascender line)
@@ -556,7 +623,8 @@ def main():
 
     data = build(tpl, chain, H, y_off, base_new, add_vn=not a.no_vn,
                  tracking=a.tracking, space_ratio=a.space_ratio,
-                 glow=a.glow, mark_lift=a.mark_lift, stroke=a.stroke)
+                 glow=a.glow, mark_lift=a.mark_lift, stroke=a.stroke,
+                 normalize_punctuation=norm)
     with open(a.out, 'wb') as fh:
         fh.write(data)
     print('-> %s (%s byte)' % (a.out, format(len(data), ',')))
