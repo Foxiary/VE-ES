@@ -109,6 +109,20 @@ def cell_offset(g, record, col):
     return struct.unpack_from('<Q', g.raw, g.tbl + record * g.stride + col)[0]
 
 
+QUOTES_RX = re.compile(r"['\"‘’“”]")
+
+
+def same_source(game, sheet):
+    """Whether a sheet's source cell is the game's string, give or take.
+
+    Folds break padding (`canon()`) and every kind of quote mark into one. Only
+    for this confirmation: the write itself is addressed by the id, and what
+    goes into the game is the translator's own text.
+    """
+    return (QUOTES_RX.sub("'", canon(game))
+            == QUOTES_RX.sub("'", canon(sheet)))
+
+
 def plan(ws, g):
     """({old text: new text}, tally, [refusal lines]) for one database file."""
     rows = ws.iter_rows(values_only=True)
@@ -141,8 +155,12 @@ def plan(ws, g):
             continue
         # canon(): the sheet's source column may carry padding around its
         # breaks from whatever edited it. The id already names the exact cell;
-        # this only has to confirm the sheet belongs to this build.
-        if canon(g.text(rel)) != canon(src):
+        # this only has to confirm the sheet belongs to this build. Quotes are
+        # folded too: sheet (5) of 11/10 came back with `'` turned into `"`
+        # in its ENGLISH column (`Beautiful Lovers" Tragedy`), and an exact
+        # test refused those rows, which put three translated cells back into
+        # English in a release build.
+        if not same_source(g.text(rel), src):
             st['van ban khong khop'] += 1        # sheet built from another dump
             continue
         if commands(tgt) != commands(src):

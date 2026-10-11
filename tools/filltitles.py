@@ -50,6 +50,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from applyvi import cell_str                          # noqa: E402
 
+QUOTES = str.maketrans({c: "'" for c in '"‘’“”'})
+
+
+def fold_quotes(s):
+    """Every kind of quote mark as `'`, for comparison only."""
+    return s.translate(QUOTES)
+
 PREFIX_SHEET = 'title_prefix'
 
 # Names that stay as they are in Vietnamese. Confirmed against the sheet's own
@@ -114,7 +121,11 @@ def scan(merged, flow):
                 odd.append((name, en, 'khoa khong co trong dbFlowchart'))
                 continue
             body_en, body_vi = hit
-            if not disp.endswith(body_en):
+            # Quotes folded, one character for one, so the prefix length below
+            # still holds: sheet (5) of 11/10 had `'` turned into `"` in its
+            # English column, and `Beautiful Lovers" Tragedy` no longer ended
+            # the script's `...Beautiful Lovers' Tragedy`.
+            if not fold_quotes(disp).endswith(fold_quotes(body_en)):
                 odd.append((name, en, 'than khac dbFlowchart (%r)' % body_en[:40]))
                 continue
             prefix = disp[:-len(body_en)]
