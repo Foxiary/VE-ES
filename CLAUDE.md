@@ -158,10 +158,16 @@ one letter's border never falls on the next letter's core; a sentence runs
 ~14% wider, still under stock. The run `2 4 4 4 4 6 a d f f f` that once
 justified `--glow` as "the stock soft ramp" is this outline.
 
-### The engine draws the ADV font at 0.588
+### The engine draws the ADV font at 0.588 — on the Glossary
 
 Measured off a screenshot: the word `chống` is 182 px wide in `advfont1.ffu` and
 107 px on screen at 1080p. The Glossary and the Options sample box both use it.
+
+**Not every screen uses that scale.** A probe build put nineteen ruler lines of
+known width into the framed monologue window of the prologue and fitted their
+ends: `x = 379.9 + 0.5583 * width` at 1080p, ±0.5 px over eight lines. So that
+window draws at **0.5583**, not 0.588. Both numbers are right for the screen
+they were measured on; neither generalises.
 
 This is what decides Vietnamese legibility, and it is not a font problem.
 Vietnamese stacks a tone mark over a circumflex or breve, and at these cap
@@ -406,6 +412,39 @@ fits the message box and not the backlog is still broken. One ceiling covers all
 four fonts — they share a cell height, so a unit is the same on screen in each;
 what differs is how many units a sentence costs, which is why a line is only
 safe when it fits under the ceiling in *all four*.
+
+**But the backlog is not the only screen that binds, because the script picks
+the window.** Each message box opens with a `global_call == 1` instruction whose
+second field is the address of a window routine — no parameters, no data block,
+a bare mode switch — and the mode *sticks*, so a box calling none keeps what the
+last one set. Four of them cover the game:
+
+| routine | boxes | what it is |
+|---|---|---|
+| `74780` | 37,750 | the message box, with or without a name panel |
+| `72660` | 709 | the framed monologue screen |
+| `212744` | 783 | two narrower windows, not yet probed |
+| `209872` | 431 | |
+
+`72660` precedes 88.4% of boxes padded with four or more blank slots and 0.0% of
+unpadded ones, which is what gave it away. Its width came off the probe build
+above: the text is left-aligned at x=384 and the frame's inner gold line is at
+x=1594, so **2175** units is where a line touches the border and **2069** keeps
+the 59 px margin the left side has. Two checks agree — the widest Japanese line
+in this window (1908) lands 149 px clear, and the Vietnamese line photographed
+running over the ornament (2316) lands at x=1673, past the outer bar at 1619.
+
+**Nothing is clipped.** The engine draws straight over the frame art, so these
+are design limits, not limits it enforces — which is exactly why no structural
+check could ever have found them.
+
+`textwidth.WINDOW_CEILING` holds the measured ones and `ceiling_for()` takes the
+narrower of the window and the backlog; `reflow.boxes_with_window()` says which
+window a box draws in. Held to the backlog alone, nothing in the translation
+overflowed; held to its own window, **146 lines did** on the sheet of 28/09 —
+all of them in `72660` — and 9 on sheet (2) of 11/10, after the translators had
+re-broken the rest. `tools/quarong.py` lists them. An unprobed window gets no guess: it falls
+through to the backlog.
 
 **Measure with the font that ships, not the stock one.** The build replaces
 `SYSTEM.cpk` with regenerated Vietnamese fonts whose metrics differ. Measuring

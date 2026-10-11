@@ -293,7 +293,7 @@ def cell_text(block, allow_short):
     return t
 
 
-def story_rows(script, delta, filled=None, table='main'):
+def story_rows(script, delta, filled=None, table='main', wanted=None):
     """(id, source, role, (ins_i, blk_i), capacity) for every translatable block.
 
     `capacity` is the block's payload size as shipped, which is how many bytes a
@@ -315,6 +315,19 @@ def story_rows(script, delta, filled=None, table='main'):
         Japanese puts a line in it. That keeps the other 5,909 empty slots -
         genuine blank lines in both builds - out of the sheet. The source cell
         is empty, which is what `applyvi.py` then checks the block against.
+
+    A PADDING SLOT THE TRANSLATION WRITES INTO IS A SLOT TOO
+        The framed monologue window pads each box with blank slots above the
+        text, blank in BOTH builds, so `filled` never names them. But they are
+        exactly where a line too wide for that window is re-broken into (see
+        `quarong.py`), and the translators do so: sheet (2) of 11/10 carried 48
+        such rows. Emitting blank slots only on Japanese evidence dropped every
+        one of them at --merge, silently - the second half of the sentence
+        reached the game and the first half did not, and the width check then
+        passed the box because it only saw what was left.
+
+        `wanted` is the set of ids the incoming translation puts text into; a
+        blank slot in it is emitted like one Japanese fills.
     """
     roles = roles_at(delta, table)
     for i, ins in enumerate(script.instructions):
@@ -324,15 +337,17 @@ def story_rows(script, delta, filled=None, table='main'):
         blocks = ins.blocks[:1] if role in SINGLE_BLOCK else ins.blocks
         for blk_i, b in enumerate(blocks):
             t = cell_text(b, allow_short=role in SINGLE_BLOCK)
+            rid = '%d___%X_%s' % (i, b.data_off, role)
             if t is None:
                 # `text() is None` is a number or a control word, not an empty
                 # line, and no translation belongs in it.
-                if (role not in EMPTIABLE or not filled
-                        or (i, blk_i) not in filled or b.text() is None):
+                if role not in EMPTIABLE or b.text() is None:
+                    continue
+                if not ((filled and (i, blk_i) in filled)
+                        or (wanted and rid in wanted)):
                     continue
                 t = ''
-            yield ('%d___%X_%s' % (i, b.data_off, role), t, role, (i, blk_i),
-                   len(b.raw))
+            yield (rid, t, role, (i, blk_i), len(b.raw))
 
 
 def role_align(en, jp, en_roles, jp_roles):
@@ -989,7 +1004,12 @@ def main():
             # A slot English left empty reads in the sheet as a row with no
             # source, which is otherwise what an extraction bug looks like. Say
             # so in the note column rather than leaving it to be guessed at.
-            note = 'o trong - ban Nhat co dong nay' if src == '' else None
+            if src != '':
+                note = None
+            elif coord in jmap:
+                note = 'o trong - ban Nhat co dong nay'
+            else:
+                note = 'o dem - bang dich ngat cau xuong day'
             out.append((rid, src, jp_mine, role, vi,
                         ', '.join(t for _c, t in flags), note))
         return out
@@ -1019,7 +1039,11 @@ def main():
                                         table)
                 except ValueError as e:
                     skipped.append('%s (JP): %s' % (base, e))
-            rows = list(story_rows(script, delta, jmap, table))
+            # Slots the translation writes into are kept even where Japanese
+            # leaves them blank - the padding a too-wide line is re-broken into.
+            theirs = merge.get(sheet_name(base), {})
+            wanted = {rid for rid, (vi, _jp) in theirs.items() if vi}
+            rows = list(story_rows(script, delta, jmap, table, wanted))
             if not rows:
                 skipped.append('%s: khong co thoai' % base)
                 continue

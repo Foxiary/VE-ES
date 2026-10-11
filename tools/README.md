@@ -212,6 +212,7 @@ vật bảng ghi rõ còn build vẫn để `？？？`, hoặc một động t�
 - `portjp2us.py` — chuyển bản dịch neo theo bản Nhật sang build khác
 - `relinkjp.py` — dựng lại cột `EN ID` của bảng neo bản Nhật từ chính hai build
 - `chuadich.py` — dòng game còn hiện tiếng Anh, kèm vị trí chèn trong bảng dịch và cả khung thoại
+- `quarong.py` — dòng vẽ rộng hơn khung nó hiện ra, kèm ô đệm trống để ngắt lại
 
 Quy trình: `mksheet.py` → dịch cột C → `mksheet.py --merge --relink` →
 `applyvi.py` → `cpk.py repack`.
@@ -306,6 +307,65 @@ cả thứ tự giữa các font.
 
 `--report` xuất danh sách câu **tràn khung**; `--fit-width` bỏ hẳn chúng.
 `--max-bytes` vẫn còn cho quy trình cũ nhưng đo sai đại lượng.
+
+#### Backlog không phải khung duy nhất — kịch bản tự chọn cửa sổ
+
+Mỗi khung thoại mở bằng một lệnh `global_call == 1` gọi một **hàm cửa sổ**
+(không tham số, không data block — chỉ là lệnh đổi chế độ), và chế độ đó **dính**:
+khung nào không tự gọi thì giữ chế độ khung trước. Bốn hàm phủ hết game:
+
+| hàm | số khung | là gì |
+|---|---|---|
+| `74780` | 37.750 | khung thoại thường, có hoặc không có bảng tên |
+| `72660` | 709 | màn độc thoại có khung hoa văn |
+| `212744` | 783 | hai cửa sổ hẹp hơn, chưa dò |
+| `209872` | 431 | |
+
+`72660` hẹp hơn backlog: **2069** đơn vị (2175 là lúc chữ chạm viền), đo bằng bản
+dò đặt 19 dòng thước có bề rộng biết trước vào prologue rồi khớp vị trí mép phải
+trên ảnh chụp — `x = 379,9 + 0,5583 × bề rộng` ở 1080p. **Game không cắt chữ**, nó
+vẽ thẳng đè lên hoa văn, nên đây là giới hạn thẩm mỹ chứ không phải giới hạn
+engine ép.
+
+`textwidth.WINDOW_CEILING` giữ các trần đã đo, `ceiling_for()` lấy cái hẹp hơn
+giữa cửa sổ và backlog, `reflow.boxes_with_window()` cho biết khung nào vẽ ở cửa
+sổ nào. `applyvi.py` và `reflow.py` đều đã nối vào đó. Cửa sổ chưa dò thì không
+đoán bừa — rơi về backlog như cũ.
+
+Đo theo backlog thì bản dịch không có dòng nào tràn; đo theo đúng cửa sổ thì
+bảng ngày 28/09 có **146 dòng**, tất cả nằm ở `72660`; bảng `(2)` ngày 11/10 còn
+**9** sau khi nhóm dịch đã tự ngắt lại phần còn lại. Xem `quarong.py`.
+
+### `quarong.py` — dòng rộng hơn khung nó hiện ra
+
+```bash
+python quarong.py work/virche_vi.xlsx work/qua_rong.xlsx
+python quarong.py work/virche_vi.xlsx work/qua_rong.xlsx "Shuuen_JP_STORY (8).xlsx"
+```
+
+Tham số thứ ba là bảng của nhóm dịch; có nó thì mỗi hàng kèm luôn số dòng Excel
+bên đó.
+
+Khung ở cửa sổ `72660` có 4–5 **ô đệm** (ô chứa một dấu cách toàn rộng, nằm ngay
+trên phần chữ). `mksheet.py` không xuất chúng vì không có gì để dịch, nhưng đó là
+lệnh thật và ghi chữ vào được — nên khung ngắt lại được thành nhiều dòng hơn, chữ
+chỉ nhích **lên** một dòng.
+
+Mỗi hàng xuất ra cả khung hiện tại và cả khung sau khi ngắt lại, mỗi dòng kèm mã
+ô để copy thẳng vào cột A. Ba trường hợp:
+
+| ghi chú | nghĩa | bảng 28/09 | bảng (2) |
+|---|---|---|---|
+| `chi can ngat lai ... cho deu` | khung đủ dòng rồi, chỉ dồn chữ chưa đều — chữ không xê dịch | 76 | 4 |
+| `ngat lai thanh N dong (them o dem)` | thiếu dòng thật, mượn một ô đệm | 53 | 5 |
+| `khong tach duoc` | hết ô, phải dịch ngắn lại | 7 | 0 |
+
+22 khung có một lệnh gọi `96412` (nhiều khả năng là phát giọng đọc) chen giữa
+ô đệm và câu. Lệnh đó không đóng khung, nên ô đệm phía trên vẫn dùng được;
+trước đây tool coi nó là ranh giới khung và báo nhầm 303/5495 là hết ô.
+
+Số dòng Excel lấy bằng chính phép căn hàng của `--relink`, không đọc cột `EN ID`
+(cột đó lệch). Đã đối chiếu 9/9 dòng với bảng `(2)`.
 
 ### Con trỏ gọi hàm — vì sao block dài ra từng làm treo game
 

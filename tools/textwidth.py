@@ -38,6 +38,42 @@ WHAT THE CEILING IS
     costs in each. A line is safe when it fits under the ceiling in ALL four,
     since the player chooses the font in Options.
 
+ONE CEILING IS NOT ENOUGH: THE SCRIPT PICKS THE WINDOW
+    The backlog is the narrowest screen a line of DIALOGUE appears on, but the
+    story does not draw every box in the dialogue window. Each box opens with a
+    `global_call == 1` instruction whose second field is the address of a window
+    routine - no parameters, no data block, just a mode switch - and the mode
+    STICKS, so a box calling none keeps what the last one set. Four of them
+    carry the whole game:
+
+        74780    37,750 boxes   the message box, with or without a name panel
+        72660       709 boxes   the framed monologue screen
+        212744      783 boxes   two narrower windows, not yet measured
+        209872      431 boxes
+
+    `72660` appears before 88.4% of boxes padded with four or more blank slots
+    and before 0.0% of unpadded ones, which is what first gave it away.
+
+    Its width was then read off a probe build the same way the three above
+    were. Nineteen ruler lines labelled with their own advance width were
+    written into the three `72660` boxes that open the prologue, and their ends
+    measured on the screenshots:
+
+        mep phai = 379.9 + 0.5583 * width          (1080p, +-0.5px over 8 lines)
+
+    The text is left-aligned at x=384 and the frame's inner gold line is at
+    x=1594 - so 2175 units is where a line touches the border, and 2069 is
+    where it keeps the 59px margin it has on the left. NOTHING IS CLIPPED: the
+    engine draws straight over the frame art, so these are design limits, not
+    limits the engine enforces. Two checks agree: the widest Japanese line in
+    this window (1908) lands 149px clear of the border, and the Vietnamese line
+    photographed running over the ornament (2316) lands at x=1673, past both
+    the inner line and the outer bar at 1619.
+
+    That probe also measured the scale for this window at 0.5583 px per unit,
+    not the 0.588 recorded in CLAUDE.md - which was read off the Glossary. The
+    two screens really do scale differently; the older number is not wrong.
+
 WHAT COUNTS AS ONE LINE
     `#n` is a line break, so a block holding one splits into two drawn lines and
     each is measured on its own. `#Color[k]` draws nothing and is removed.
@@ -75,6 +111,38 @@ NARRATION_CEILING = 3200
 DIALOGUE_CEILING = 2990
 BACKLOG_CEILING = 2430
 CEILING = BACKLOG_CEILING
+
+# The window routine each message box opens with. See "ONE CEILING IS NOT
+# ENOUGH" in the header: these are call ADDRESSES, shared across the main
+# game's files and written in the same numbering as `mksheet.STORY_ROLES`, so
+# a file whose table sits at a delta has to subtract it before looking up here.
+WINDOW_DIALOGUE = 74780         # the message box - the great majority of boxes
+WINDOW_FRAMED = 72660           # the framed monologue screen
+WINDOW_NARROW_A = 212744        # two narrower windows, not yet probed
+WINDOW_NARROW_B = 209872
+WINDOW_OPS = (WINDOW_DIALOGUE, WINDOW_FRAMED, WINDOW_NARROW_A, WINDOW_NARROW_B)
+
+# Where a line in the framed window stops looking right. 2175 is where it
+# touches the frame; this is the one that keeps the margin the left side has.
+FRAMED_CEILING = 2069
+FRAMED_TOUCHES_BORDER = 2175
+
+# Only the window that has been measured goes in. An unprobed window is not
+# given a guess: it falls through to the backlog, which is what every line was
+# held to before.
+WINDOW_CEILING = {
+    WINDOW_FRAMED: FRAMED_CEILING,
+}
+
+
+def ceiling_for(window, default=CEILING):
+    """How wide a line may draw in `window`, in advance units.
+
+    Never wider than `default`: a dialogue line is replayed in the backlog
+    whatever window it was spoken in, so the backlog still binds. A window
+    narrower than the backlog - the framed one is - binds instead.
+    """
+    return min(WINDOW_CEILING.get(window, default), default)
 
 
 def display_lines(text):

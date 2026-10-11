@@ -139,10 +139,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stcm2l import Script                          # noqa: E402
 from cpk import CPK                                # noqa: E402
-from textwidth import Widths, CEILING, shown       # noqa: E402
+from textwidth import (Widths, CEILING, shown,      # noqa: E402
+                       WINDOW_FRAMED, ceiling_for)
 from linebreak import to_game                      # noqa: E402
 from mksheet import detect_delta                   # noqa: E402
-from reflow import boxes_of                        # noqa: E402
+from reflow import boxes_with_window               # noqa: E402
 
 ID_RX = re.compile(r'^\d+___([0-9A-Fa-f]+)_(text|name|choice|title|var)$')
 MARKUP_RX = re.compile(r'#(?:NAME|Color)\[\d+\]|#n')
@@ -403,7 +404,7 @@ def sheet_columns(header):
 
 def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
          widths=None, ceiling=CEILING, max_width=0, fit_width=False,
-         boxes=None):
+         boxes=None, limits=None):
     """{block data offset: payload} plus a tally of everything left out.
 
     With `fit_only`, a line is written only if it fits the block it replaces and
@@ -424,6 +425,10 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
     what the command check counts over for `text` rows. The sheet has to be read
     to the end before any of them can be judged, so this runs in two passes: one
     to read and address every row, one to write the rows their box allows.
+
+    `limits` is {row id: ceiling} where the box draws in a window narrower than
+    `ceiling` - the framed monologue one does, at 2069 against the backlog's
+    2430. A row that is not in it answers to `ceiling` as before.
     """
     rows = ws.iter_rows(values_only=True)
     head = next(rows, ())
@@ -516,12 +521,15 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
         # How far past the box this line draws, and how wide it is at its worst
         # across the four dialogue fonts. Both are 0 when no font was loaded.
         over_px = widest_px = 0
+        # The ceiling is the window this box draws in, which for the framed
+        # monologue screen is narrower than the backlog.
+        limit = (limits or {}).get(rid, ceiling)
         if widths is not None:
             drawn = shown(tgt, kind)
-            over_px = widths.over(drawn, ceiling)
+            over_px = widths.over(drawn, limit)
             widest_px = max(widths.widest(drawn).values(), default=0)
         if over_px > 0:
-            st['rong hon khung backlog'] += 1
+            st['rong hon khung'] += 1
         if len(payload) > 84:
             st['dai hon 84B'] += 1
         # The report is the list of lines someone has to shorten, so only the
@@ -691,13 +699,20 @@ def main():
         delta = detect_delta(script)
         # Every slot of the box, including the ones English left empty; `plan`
         # then drops whichever the sheet does not name. See boxes_of().
-        boxes = (None if delta is None
-                 else boxes_of(script, delta, n, keep_blank=True))
+        boxed = (None if delta is None
+                 else boxes_with_window(script, delta, n, keep_blank=True))
+        boxes = None if boxed is None else [rows for rows, _w in boxed]
+        # Each row answers to the window its own box opens with. Only the ones
+        # narrower than `ceiling` are listed; the rest fall through to it.
+        limits = {rid: ceiling_for(w, ceiling)
+                  for rows, w in (boxed or ()) for rid in rows
+                  if ceiling_for(w, ceiling) < ceiling}
         if boxes is None:
             nodelta.append(n)
         mine = []
         repl, st = plan(wb[n], script, a.max_bytes, mine, a.fit_only,
-                        widths, ceiling, a.max_width, a.fit_width, boxes)
+                        widths, ceiling, a.max_width, a.fit_width, boxes,
+                        limits)
         longrows += [(n,) + r for r in mine]
         tot.update(st)
 
@@ -731,9 +746,12 @@ def main():
     if nodelta:
         print('!! %d file khong doc duoc bang opcode, dem lenh theo tung dong: %s'
               % (len(nodelta), ' '.join(nodelta[:12])))
-    if tot['rong hon khung backlog']:
-        print('tran khung backlog (>%d don vi): %s dong%s' %
-              (ceiling, format(tot['rong hon khung backlog'], ','),
+    if tot['rong hon khung']:
+        # Not one ceiling any more: a box in the framed monologue window is
+        # held to that window, which is narrower than the backlog.
+        print('tran khung (backlog %d, khung vien doc thoai %d): %s dong%s' %
+              (ceiling, ceiling_for(WINDOW_FRAMED, ceiling),
+               format(tot['rong hon khung'], ','),
                '' if (a.fit_width or a.max_width)
                else '  (van ghi - dung --fit-width de bo)'))
     if tot['dai hon 84B']:

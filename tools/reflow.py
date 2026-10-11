@@ -40,10 +40,20 @@ WHAT A BOX IS
     slot is filled - with an ideographic space if the text runs out early.
 
 WHEN IT WILL NOT FIT
-    Against the measured backlog width every box fits - 0 of 39,758 - where the
-    first pass, breaking to a ceiling 22% too narrow, stranded 2,157 of them.
-    The guard stays anyway: a box that cannot be broken into the lines it has is
-    left completely untouched, with the old line-by-line text still in place,
+    Against the backlog alone every box fits - 0 of 39,758 - where the first
+    pass, breaking to a ceiling 22% too narrow, stranded 2,157 of them. Holding
+    each box to the window it actually draws in leaves 61: the framed monologue
+    window is 2069 units against the backlog's 2430, and those boxes do not have
+    enough lines for their text at that width.
+
+    They are not stuck. The window pads its boxes with four or five blank slots,
+    which are live instructions this tool does not touch - it keeps every box at
+    the line count it has, so the text does not move up the screen. Borrowing one
+    is a layout decision, so it goes to a human: `quarong.py` lists each box with
+    the padding slot it could use and a suggested re-break.
+
+    The guard stays either way: a box that cannot be broken into the lines it has
+    is left completely untouched, with the old line-by-line text still in place,
     and counted. Dropping the overflow instead would lose sentences, which is
     worse than leaving a box for a human.
 
@@ -85,7 +95,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cpk import CPK                                # noqa: E402
 from stcm2l import Script                          # noqa: E402
 from mksheet import detect_delta, STORY_ROLES, cell_text   # noqa: E402
-from textwidth import Widths, CEILING, DEFAULT_NAME        # noqa: E402
+from textwidth import (Widths, CEILING, DEFAULT_NAME,      # noqa: E402
+                       WINDOW_OPS, WINDOW_FRAMED, ceiling_for)
 from linebreak import to_sheet, to_game                    # noqa: E402
 
 # Where the fonts the build ships are looked for, in order. `build.py` writes
@@ -290,8 +301,16 @@ def balance_colour(lines):
 
 # --------------------------------------------------------------------- boxes
 
-def boxes_of(script, delta, sheet, keep_blank=False):
-    """[[row id, ...]] - the real text slots of each message box, in order.
+# A routine called 13,073 times with a numeric id - most likely voice playback -
+# which 22 framed boxes call between their padding and the spoken line. It does
+# not close the box (opcode 500 does), so the padding above still belongs to
+# it. Treating it as a box boundary reported 303/5495 as having no spare slot
+# when five sat right above it.
+PAD_TRANSPARENT = 96412
+
+
+def boxes_with_window(script, delta, sheet, keep_blank=False):
+    """[([row id, ...], window)] - each message box and the window it draws in.
 
     `keep_blank` also lists the slots English left EMPTY. Those are lines of the
     box as much as any other - the localiser emptied the block rather than
@@ -300,27 +319,61 @@ def boxes_of(script, delta, sheet, keep_blank=False):
     those rows must leave them out, or every box holding one is read as missing
     a translation. Off by default for that reason; `applyvi.py` turns it on and
     then keeps only the slots its sheet actually names.
+
+    `window` is the routine the box was opened with - see
+    `textwidth.WINDOW_OPS`. It is a mode switch that sticks, so a box that calls
+    none inherits the last one set, and the first boxes of a file can inherit
+    nothing: those come back as 0, which `textwidth.ceiling_for` reads as the
+    ordinary ceiling. 80 boxes of 39,753 are in that position.
     """
     roles = {op + delta: role for op, role in STORY_ROLES.items()}
+    windows = {op + delta: op for op in WINDOW_OPS}
     ins = script.instructions
-    out, i = [], 0
+    out, i, last_end, window = [], 0, 0, 0
     while i < len(ins):
         if roles.get(ins[i].opcode) != 'text':
             i += 1
             continue
-        j, rows = i, []
-        while j < len(ins) and roles.get(ins[j].opcode) == 'text':
+        # Only a call carries a window: with global_call 0 the same number is
+        # an ordinary opcode and means something else entirely.
+        for k in range(last_end, i):
+            if ins[k].global_call == 1 and ins[k].opcode in windows:
+                window = windows[ins[k].opcode]
+        j, rows, real = i, [], False
+        while j < len(ins):
+            if roles.get(ins[j].opcode) != 'text':
+                # A call between a framed box's padding and its first line does
+                # not end the box: the line still lands on the sixth row, below
+                # the five spacers, exactly as in a box with nothing between.
+                # Only before any real text, so two lines either side of the
+                # call are never joined into one box they were not in before.
+                if (not real and j + 1 < len(ins)
+                        and ins[j].global_call == 1
+                        and ins[j].opcode == PAD_TRANSPARENT + delta
+                        and roles.get(ins[j + 1].opcode) == 'text'):
+                    j += 1
+                    continue
+                break
             if ins[j].blocks:
                 b = ins[j].blocks[0]
                 # `text() is None` is a number, not an empty line.
-                if (cell_text(b, True) is not None
-                        or (keep_blank and b.text() is not None)):
+                if cell_text(b, True) is not None:
+                    real = True
+                    rows.append('%d___%X_text' % (j, b.data_off))
+                elif keep_blank and b.text() is not None:
                     rows.append('%d___%X_text' % (j, b.data_off))
             j += 1
         if rows:
-            out.append(rows)
+            out.append((rows, window))
+        last_end = j
         i = j
     return out
+
+
+def boxes_of(script, delta, sheet, keep_blank=False):
+    """[[row id, ...]] - the real text slots of each message box, in order."""
+    return [rows for rows, _window in
+            boxes_with_window(script, delta, sheet, keep_blank)]
 
 
 def letters(s):
@@ -369,15 +422,24 @@ def main():
         print('!! ' + '=' * 68)
     ceiling = a.ceiling
     print('font do: %s' % font)
-    print('tran: %d don vi (backlog - khung hep nhat)' % ceiling)
+    print('tran: %d don vi (backlog), rieng khung vien doc thoai %d'
+          % (ceiling, ceiling_for(WINDOW_FRAMED, ceiling)))
     widths = Widths.from_cpk(font)
-    br = Breaker(widths, ceiling)
+    # One breaker per distinct ceiling: each keeps its own cache of which lines
+    # fit, and a cache is only valid for the width it was filled at.
+    breakers = {}
+
+    def breaker(width):
+        if width not in breakers:
+            breakers[width] = Breaker(widths, width)
+        return breakers[width]
 
     wb = openpyxl.load_workbook(a.src)
     cu = CPK(a.story)
 
     st = collections.Counter()
     changed = {}                     # (sheet, row id) -> new Vietnamese
+    limits = {}                      # (sheet, row id) -> the ceiling it answers to
     misfit = []
     for _i, name, row in cu.files():
         if not name.endswith('.DAT'):
@@ -395,8 +457,14 @@ def main():
                 # Re-breaking works in the game's spelling: the breaker
                 # counts #n, and what it emits goes back through to_sheet.
                 vi[str(r[0]).strip()] = to_game(str(r[2]).strip())
-        for rows in boxes_of(script, delta, sheet):
+        for rows, window in boxes_with_window(script, delta, sheet):
             st['khung'] += 1
+            # The box is re-broken to the window the script draws it in, not to
+            # the backlog: the framed monologue window is narrower than that.
+            width = ceiling_for(window, ceiling)
+            for rid in rows:
+                limits[(sheet, rid)] = width
+            br = breaker(width)
             have = [vi.get(rid, '') for rid in rows]
             if not all(have):
                 st['khung thieu ban dich'] += 1
@@ -432,7 +500,7 @@ def main():
             if len(r) > 7:
                 r[7].value = len(new.encode('utf-8'))
             if len(r) > 8:
-                over = widths.over(new, ceiling)
+                over = widths.over(new, limits.get(key, ceiling))
                 r[8].value = ('qua rong +%dpx' % over) if over > 0 else None
     wb.save(a.out)
 
