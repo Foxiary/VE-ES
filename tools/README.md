@@ -332,6 +332,24 @@ giữa cửa sổ và backlog, `reflow.boxes_with_window()` cho biết khung nà
 sổ nào. `applyvi.py` và `reflow.py` đều đã nối vào đó. Cửa sổ chưa dò thì không
 đoán bừa — rơi về backlog như cũ.
 
+**Đo lại cho game khác bằng `windows.json`.** Các con số trên là của Virche
+Evermore. Màn "Đo khung chữ" của app desktop đo bề rộng khung từ một ảnh chụp
+(một câu đã biết nội dung + mép khung) và ghi vào `windows.json` ở thư mục dự
+án, cạnh `fonts.json`:
+
+```json
+{"windows": {"backlog": {"ceiling": 2430}, "dialogue": {"ceiling": 2990},
+             "framed": {"ceiling": 2069}, "narration": {"ceiling": 3200}}}
+```
+
+`textwidth.py` đọc file đó khi được import (thư mục làm việc là thư mục dự án):
+màn nào đã đo thì thay số tương ứng, màn nào chưa đo thì giữ số của Virche.
+`quarong.py` in ra dòng `kich thuoc khung: …` cho biết đang dùng số nào.
+`ceiling` là chỗ xa nhất một câu được chạm tới, đúng chỗ đã bấm trên ảnh — muốn
+chừa lề như `2069` của khung `72660` thì bấm lùi vào trong viền. Lưu ý: việc
+gán khung cho từng câu vẫn dựa vào địa chỉ cửa sổ của Virche (`74780`,
+`72660`…), nên với game khác thường chỉ có số `backlog` là có tác dụng.
+
 Đo theo backlog thì bản dịch không có dòng nào tràn; đo theo đúng cửa sổ thì
 bảng ngày 28/09 có **146 dòng**, tất cả nằm ở `72660`; bảng `(2)` ngày 11/10 còn
 **9** sau khi nhóm dịch đã tự ngắt lại phần còn lại. Xem `quarong.py`.

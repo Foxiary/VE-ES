@@ -47,7 +47,7 @@ from linebreak import to_game, to_sheet                    # noqa: E402
 from mksheet import detect_delta                           # noqa: E402
 from reflow import Breaker, boxes_with_window, resolve_font, STOCK_FONT  # noqa: E402
 from stcm2l import Script                                  # noqa: E402
-from textwidth import Widths, CEILING, ceiling_for         # noqa: E402
+from textwidth import Widths, CEILING, ceiling_for, ceilings_source  # noqa: E402
 
 HEAD = ['sheet', 'dong Excel', 'ID', 'o dem dung duoc', 'so o dem con trong',
         'be rong', 'tran cua khung', 'vuot', 'JP trong file game',
@@ -143,6 +143,7 @@ def main():
     if is_stock:
         print('!! dang do bang %s - font tieng Anh goc, moi so deu sai' % STOCK_FONT)
     print('font do: %s' % font)
+    print(ceilings_source())
     widths = Widths.from_cpk(font)
     breakers = {}
 

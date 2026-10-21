@@ -90,6 +90,7 @@ WHAT COUNTS AS ONE LINE
     English executable carries the same `Ruby[` token in the same 20-token set
     of inline commands, so the parser knows it.
 """
+import json
 import os
 import re
 import sys
@@ -133,6 +134,51 @@ FRAMED_TOUCHES_BORDER = 2175
 WINDOW_CEILING = {
     WINDOW_FRAMED: FRAMED_CEILING,
 }
+
+# Widths measured from a screenshot on the desktop app's "Measure text boxes"
+# page, saved as windows.json in the project folder - the working directory
+# these tools run in. A measured screen replaces the probe-build number above;
+# a screen nobody measured keeps it. Each `ceiling` is the furthest a line may
+# reach on that screen, as clicked on the screenshot, so any margin is already
+# in it. Read before ceiling_for() is defined: its default is bound then.
+WINDOWS_FILE = 'windows.json'
+
+
+def measured_windows(path=WINDOWS_FILE):
+    """{screen: ceiling} from windows.json, or {} when there is none or it is unreadable."""
+    try:
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    windows = data.get('windows') if isinstance(data, dict) else None
+    out = {}
+    for screen, entry in (windows if isinstance(windows, dict) else {}).items():
+        ceiling = entry.get('ceiling') if isinstance(entry, dict) else None
+        if isinstance(ceiling, (int, float)) and not isinstance(ceiling, bool) and ceiling > 0:
+            out[screen] = int(round(ceiling))
+    return out
+
+
+MEASURED = measured_windows()
+NARRATION_CEILING = MEASURED.get('narration', NARRATION_CEILING)
+DIALOGUE_CEILING = MEASURED.get('dialogue', DIALOGUE_CEILING)
+BACKLOG_CEILING = MEASURED.get('backlog', BACKLOG_CEILING)
+CEILING = BACKLOG_CEILING
+if 'framed' in MEASURED:
+    FRAMED_CEILING = MEASURED['framed']
+    WINDOW_CEILING[WINDOW_FRAMED] = FRAMED_CEILING
+if 'dialogue' in MEASURED:
+    # Still held to the backlog by ceiling_for(), unless the backlog is wider.
+    WINDOW_CEILING[WINDOW_DIALOGUE] = DIALOGUE_CEILING
+
+
+def ceilings_source():
+    """One line saying where the box widths come from, for the tools to print."""
+    if not MEASURED:
+        return 'kich thuoc khung: so do san cua Virche Evermore (chua co %s)' % WINDOWS_FILE
+    return 'kich thuoc khung: %s (%s)' % (
+        WINDOWS_FILE, ', '.join('%s %d' % item for item in sorted(MEASURED.items())))
 
 
 def ceiling_for(window, default=CEILING):
