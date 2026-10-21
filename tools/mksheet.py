@@ -145,7 +145,7 @@ from stcm2l import Script                          # noqa: E402
 from gbnl import GBNL                              # noqa: E402
 from cpk import CPK                                # noqa: E402
 from portjp2us import align                        # noqa: E402
-from textwidth import Widths, CEILING, shown       # noqa: E402
+from textwidth import Widths, CEILING, shown, UNMEASURED  # noqa: E402
 from linebreak import to_sheet, to_game            # noqa: E402
 
 # Opcode -> role, as laid out in the English build. Rebased per file; see above.
@@ -934,8 +934,8 @@ def main():
                          'the game draws with; the stock archive measures a '
                          'different font and gives wrong widths')
     ap.add_argument('--ceiling', type=int, default=CEILING,
-                    help='box width in advance units (default %d, the backlog, '
-                         'narrowest of the three screens)' % CEILING)
+                    help='box width in advance units (default: the backlog '
+                         'measured in windows.json)')
     ap.add_argument('--merge',
                     help='a translation sheet carrying this tool\'s EN ID column; '
                          'its Vietnamese is filled in and flagged for review')
@@ -980,6 +980,9 @@ def main():
     widths, ceiling = None, a.ceiling
     if merge:
         widths = load_fonts(a.font)
+        if widths is not None and ceiling is None:
+            print(UNMEASURED)
+            widths = None
         if widths is not None:
             print('do be rong bang %s | tran %d don vi (khung backlog)'
                   % (a.font, ceiling))

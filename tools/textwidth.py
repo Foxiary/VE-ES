@@ -105,14 +105,6 @@ RUBY_RX = re.compile(r'#Ruby\[([^\],]*),[^\]]*\]')
 DEFAULT_NAME = 'Ceres'          # what #NAME[1] shows until the player renames
 ADV_FONTS = ('advfont1.ffu', 'advfont2.ffu', 'advfont3.ffu', 'advfont4.ffu')
 
-# Box widths in advance units, read off a probe build (see the header). The
-# backlog is the one to design against: it replays every line of dialogue, so a
-# line that fits the message box but not the backlog is still broken.
-NARRATION_CEILING = 3200
-DIALOGUE_CEILING = 2990
-BACKLOG_CEILING = 2430
-CEILING = BACKLOG_CEILING
-
 # The window routine each message box opens with. See "ONE CEILING IS NOT
 # ENOUGH" in the header: these are call ADDRESSES, shared across the main
 # game's files and written in the same numbering as `mksheet.STORY_ROLES`, so
@@ -123,24 +115,16 @@ WINDOW_NARROW_A = 212744        # two narrower windows, not yet probed
 WINDOW_NARROW_B = 209872
 WINDOW_OPS = (WINDOW_DIALOGUE, WINDOW_FRAMED, WINDOW_NARROW_A, WINDOW_NARROW_B)
 
-# Where a line in the framed window stops looking right. 2175 is where it
-# touches the frame; this is the one that keeps the margin the left side has.
-FRAMED_CEILING = 2069
-FRAMED_TOUCHES_BORDER = 2175
-
-# Only the window that has been measured goes in. An unprobed window is not
-# given a guess: it falls through to the backlog, which is what every line was
-# held to before.
-WINDOW_CEILING = {
-    WINDOW_FRAMED: FRAMED_CEILING,
-}
-
-# Widths measured from a screenshot on the desktop app's "Measure text boxes"
-# page, saved as windows.json in the project folder - the working directory
-# these tools run in. A measured screen replaces the probe-build number above;
-# a screen nobody measured keeps it. Each `ceiling` is the furthest a line may
-# reach on that screen, as clicked on the screenshot, so any margin is already
-# in it. Read before ceiling_for() is defined: its default is bound then.
+# Box widths in advance units come from windows.json in the project folder - the
+# working directory these tools run in - written by the desktop app's "Measure
+# text boxes" page from a screenshot. Every game measures its own, Virche
+# Evermore included (its numbers are in tools/README.md). Each `ceiling` is the
+# furthest a line may reach on that screen, as clicked on the screenshot, so any
+# margin is already in it. A screen nobody measured has no ceiling: the width
+# checks say so and skip it rather than borrow another game's number.
+#
+# The backlog is the one to design against: it replays every line of dialogue,
+# so a line that fits the message box but not the backlog is still broken.
 WINDOWS_FILE = 'windows.json'
 
 
@@ -160,35 +144,41 @@ def measured_windows(path=WINDOWS_FILE):
     return out
 
 
+# Read before ceiling_for() is defined: its default is bound then.
 MEASURED = measured_windows()
-NARRATION_CEILING = MEASURED.get('narration', NARRATION_CEILING)
-DIALOGUE_CEILING = MEASURED.get('dialogue', DIALOGUE_CEILING)
-BACKLOG_CEILING = MEASURED.get('backlog', BACKLOG_CEILING)
+NARRATION_CEILING = MEASURED.get('narration')
+DIALOGUE_CEILING = MEASURED.get('dialogue')
+BACKLOG_CEILING = MEASURED.get('backlog')
+FRAMED_CEILING = MEASURED.get('framed')
 CEILING = BACKLOG_CEILING
-if 'framed' in MEASURED:
-    FRAMED_CEILING = MEASURED['framed']
-    WINDOW_CEILING[WINDOW_FRAMED] = FRAMED_CEILING
-if 'dialogue' in MEASURED:
-    # Still held to the backlog by ceiling_for(), unless the backlog is wider.
-    WINDOW_CEILING[WINDOW_DIALOGUE] = DIALOGUE_CEILING
+
+# Only the windows that have been measured go in. Any other window falls
+# through to the backlog.
+WINDOW_CEILING = {window: ceiling for window, ceiling in
+                  ((WINDOW_FRAMED, FRAMED_CEILING), (WINDOW_DIALOGUE, DIALOGUE_CEILING))
+                  if ceiling is not None}
+
+UNMEASURED = ('chua do khung chu (%s) - bo qua kiem tra be rong; do bang man '
+              '"Do khung chu" cua app hoac truyen --ceiling' % WINDOWS_FILE)
 
 
 def ceilings_source():
     """One line saying where the box widths come from, for the tools to print."""
     if not MEASURED:
-        return 'kich thuoc khung: so do san cua Virche Evermore (chua co %s)' % WINDOWS_FILE
+        return 'kich thuoc khung: ' + UNMEASURED
     return 'kich thuoc khung: %s (%s)' % (
         WINDOWS_FILE, ', '.join('%s %d' % item for item in sorted(MEASURED.items())))
 
 
 def ceiling_for(window, default=CEILING):
-    """How wide a line may draw in `window`, in advance units.
+    """How wide a line may draw in `window`, in advance units, or None if unmeasured.
 
     Never wider than `default`: a dialogue line is replayed in the backlog
     whatever window it was spoken in, so the backlog still binds. A window
     narrower than the backlog - the framed one is - binds instead.
     """
-    return min(WINDOW_CEILING.get(window, default), default)
+    known = [c for c in (WINDOW_CEILING.get(window), default) if c is not None]
+    return min(known) if known else None
 
 
 def display_lines(text):
@@ -262,6 +252,8 @@ class Widths:
         them. What differs is how many units a sentence costs - which is exactly
         what taking the worst font accounts for.
         """
+        if ceiling is None:
+            return 0                # no measured box to overflow
         return max((w - ceiling for w in self.widest(text).values()), default=0)
 
 

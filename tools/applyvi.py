@@ -140,7 +140,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stcm2l import Script                          # noqa: E402
 from cpk import CPK                                # noqa: E402
 from textwidth import (Widths, CEILING, shown,      # noqa: E402
-                       WINDOW_FRAMED, ceiling_for)
+                       WINDOW_FRAMED, ceiling_for, UNMEASURED)
 from linebreak import to_game                      # noqa: E402
 from mksheet import detect_delta                   # noqa: E402
 from reflow import boxes_with_window               # noqa: E402
@@ -655,8 +655,8 @@ def main():
                          'the game draws with; the stock archive measures a '
                          'different font and gives wrong widths')
     ap.add_argument('--ceiling', type=int, default=CEILING,
-                    help='box width in advance units (default %d, the backlog, '
-                         'narrowest of the three screens)' % CEILING)
+                    help='box width in advance units (default: the backlog '
+                         'measured in windows.json)')
     ap.add_argument('--fit-width', action='store_true',
                     help='skip every line that draws wider than the box in any '
                          'of the four dialogue fonts')
@@ -679,6 +679,9 @@ def main():
 
     widths = load_fonts(a.font)
     ceiling = a.ceiling
+    if widths is not None and ceiling is None:
+        print(UNMEASURED)
+        widths = None
     if widths is not None:
         print('do be rong bang %s | tran %d don vi (khung backlog)'
               % (a.font, ceiling))
@@ -706,7 +709,7 @@ def main():
         # narrower than `ceiling` are listed; the rest fall through to it.
         limits = {rid: ceiling_for(w, ceiling)
                   for rows, w in (boxed or ()) for rid in rows
-                  if ceiling_for(w, ceiling) < ceiling}
+                  if ceiling is not None and ceiling_for(w, ceiling) < ceiling}
         if boxes is None:
             nodelta.append(n)
         mine = []

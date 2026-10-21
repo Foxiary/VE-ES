@@ -173,8 +173,10 @@ def main():
         for slots, window in boxes_with_window(script, delta, name,
                                                keep_blank=True):
             limit = ceiling_for(window, CEILING)
-            if limit >= CEILING:
-                continue                     # judged against the backlog already
+            # Unmeasured windows are skipped, and so is anything the backlog
+            # already holds - this tool lists only the narrower windows.
+            if limit is None or (CEILING is not None and limit >= CEILING):
+                continue
             st['khung'] += 1
             filled = [rid for rid in slots if vi[name].get(rid)]
             over = [rid for rid in filled

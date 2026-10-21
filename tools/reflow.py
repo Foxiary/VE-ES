@@ -96,7 +96,7 @@ from cpk import CPK                                # noqa: E402
 from stcm2l import Script                          # noqa: E402
 from mksheet import detect_delta, STORY_ROLES, cell_text   # noqa: E402
 from textwidth import (Widths, CEILING, DEFAULT_NAME,      # noqa: E402
-                       WINDOW_OPS, WINDOW_FRAMED, ceiling_for)
+                       WINDOW_OPS, WINDOW_FRAMED, ceiling_for, UNMEASURED)
 from linebreak import to_sheet, to_game                    # noqa: E402
 
 # Where the fonts the build ships are looked for, in order. `build.py` writes
@@ -421,6 +421,9 @@ def main():
         print('!! se ship - moi quyet dinh ngat dong tu no deu sai.')
         print('!! ' + '=' * 68)
     ceiling = a.ceiling
+    if ceiling is None:
+        # Re-breaking needs a width to break at; there is no honest default.
+        sys.exit('!! ' + UNMEASURED)
     print('font do: %s' % font)
     print('tran: %d don vi (backlog), rieng khung vien doc thoai %d'
           % (ceiling, ceiling_for(WINDOW_FRAMED, ceiling)))
