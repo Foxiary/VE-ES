@@ -114,11 +114,13 @@ def main():
         description='build a translation sheet for the Glossary screen')
     ap.add_argument('--system', default='SYSTEM.cpk',
                     help='SYSTEM.cpk or a directory of unpacked .gbin/.gstr')
-    ap.add_argument('--jp-system', default='work/jp/CONTENTS/SYSTEM.cpk',
-                    help='the Japanese build, for the reference column')
+    ap.add_argument('--jp-system',
+                    help='the Japanese build, for the reference column; found in the project folder when not given (jpfiles.py)')
     ap.add_argument('--no-jp', action='store_true')
     ap.add_argument('--out', default=os.path.join('work', 'glossary.xlsx'))
     a = ap.parse_args()
+    from jpfiles import find_jp, DEFAULT_DIR
+    a.jp_system = a.jp_system or find_jp('SYSTEM.cpk') or os.path.join(DEFAULT_DIR, 'SYSTEM.cpk')
 
     src = read_map(a.system, ('.gbin', '.gstr'))
     jp = {} if a.no_jp else read_map(a.jp_system, ('.gbin', '.gstr'))

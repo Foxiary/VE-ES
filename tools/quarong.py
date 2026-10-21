@@ -43,6 +43,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relinkjp                                            # noqa: E402
 from applyvi import cell_str, read_scripts                 # noqa: E402
+from jpfiles import find_jp                                # noqa: E402
 from linebreak import to_game, to_sheet                    # noqa: E402
 from mksheet import detect_delta                           # noqa: E402
 from reflow import Breaker, boxes_with_window, resolve_font, STOCK_FONT  # noqa: E402
@@ -93,7 +94,11 @@ def src_rows(src_path, en_raw):
     if not src_path:
         return {}
     wb = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
-    jp_raw = dict(read_scripts('work/jp/CONTENTS/STORY.cpk'))
+    # The Japanese build may sit anywhere in the project folder.
+    jp_story = find_jp('STORY.cpk')
+    if not jp_story:
+        sys.exit('!! khong thay STORY.cpk ban tieng Nhat trong thu muc du an (xem jpfiles.py)')
+    jp_raw = dict(read_scripts(jp_story))
     out = {}
     for name in wb.sheetnames:
         if not name.isdigit() or name + '.DAT' not in en_raw:

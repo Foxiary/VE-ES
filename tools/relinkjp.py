@@ -544,8 +544,8 @@ def main():
     ap.add_argument('xlsx', help='the translation sheet to re-address')
     ap.add_argument('--story', default='STORY.cpk',
                     help='the English STORY.cpk or a directory of .DAT files')
-    ap.add_argument('--jp-story', default='work/jp/CONTENTS/STORY.cpk',
-                    help='the Japanese build the sheet is anchored to')
+    ap.add_argument('--jp-story',
+                    help='the Japanese build the sheet is anchored to; found in the project folder when not given (jpfiles.py)')
     ap.add_argument('--report', help='CSV of every row that could not be placed')
     ap.add_argument('--map', help='CSV of the whole mapping, row id -> EN ID')
     a = ap.parse_args()
@@ -563,6 +563,8 @@ def main():
               (name, n, per['ok'], per['lech'], per['moi'],
                per['giu theo bang'], n - sum(per[k] for k in PLACED)))
 
+    from jpfiles import find_jp, DEFAULT_DIR
+    a.jp_story = a.jp_story or find_jp('STORY.cpk') or os.path.join(DEFAULT_DIR, 'STORY.cpk')
     table, st, loose = tables(sheets, a.story, a.jp_story, on_file=show)
 
     print()
