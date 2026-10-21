@@ -13,8 +13,9 @@ A name is not enough to go on. A backup of the English archive or a patched
 Vietnamese one is called STORY.cpk too, so a candidate counts only when its
 script text is mostly Japanese. Mostly, not merely some: the English build
 keeps Japanese keys in its chapter titles (`<japanese key>@<title>`). Measured
-on two dialogue scripts each, the Japanese build reads 0.21 CJK characters per
-Latin letter and the English and Vietnamese ones 0.01; the cut sits between.
+on two mid-sized scripts each, the Japanese builds read 0.23 (fan disc) and
+0.30 (main game) CJK characters per Latin letter, and the English and
+Vietnamese ones 0.00-0.01; the cut sits between.
 """
 import os
 import re
@@ -47,17 +48,20 @@ def candidates(name, root='.'):
 
 
 def japanese_ratio(path, sample=2):
-    """CJK characters per Latin letter over a few small text files of the archive.
+    """CJK characters per Latin letter over a few text files of the archive.
 
-    The smallest files above 20 KB, skipping init/: those hold flags rather than
-    lines, and the archive is CRILAYLA-compressed, so small keeps this quick.
+    Files from the middle of the size range, skipping init/. Not the smallest:
+    in the fan disc those are 2000-2130, scripts that hold only flags, so a
+    Japanese archive read as having no Japanese at all. Not the largest either:
+    the archive is CRILAYLA-compressed and this reader is pure Python.
     """
     archive = CPK(path)
     rows = [row for _i, name, row in archive.files()
             if name.lower().endswith(TEXT_FILES) and '/init/' not in name.lower()]
     rows.sort(key=lambda row: row['ExtractSize'])
+    middle = max(0, len(rows) // 2 - sample // 2)
     cjk = latin = 0
-    for row in [r for r in rows if r['ExtractSize'] > 20000][:sample] or rows[:sample]:
+    for row in rows[middle:middle + sample]:
         text = archive.read(row).decode('utf-8', 'ignore')
         cjk += len(CJK_RX.findall(text))
         latin += len(LATIN_RX.findall(text))
