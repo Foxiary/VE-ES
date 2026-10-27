@@ -287,6 +287,20 @@ dialogue before it, since narration has no name row. `1444.DAT` is the
 reverse - a whole scene only the JP build ships, although the EN
 `dbEntryScript` lists it.
 
+**The fan disc's STCM2L carries two things the main game's does not**, and
+both made a correct-looking rebuild unusable:
+
+- A 16-byte **debug record** `(?, ?, source line, 16)` right after the
+  parameters of almost every instruction (635,283 in the EN fan disc). The
+  line field climbs by one per instruction; it is not an address. Before the
+  walker knew it, `check()` called every fan disc file broken.
+- An **`ID_TEXT` section after `COLLECTION_LINK`**. `COLLECTION_LINK + 4`
+  points at it (in the main game the same field points at EOF, which is why it
+  looked like a file size), header `0x3C` points at its table, and the table
+  holds absolute pointers to the symbol names after it. All three move when
+  code grows; `build()` pass 5 rebases them and `trailer_names()` is the check.
+  A scan of all 150 files found no other pointer into the trailer.
+
 **Growing a block is safe** once all three are rebased: 54 files, +1.13 MB, call
 graph and jump graph identical, verified in game. The older note in
 `portjp2us.py` that a size change crashes was describing these stale pointers,

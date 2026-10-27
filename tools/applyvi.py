@@ -596,6 +596,8 @@ def verify(original, rebuilt, same_size=False):
         bad.append('do thi goi ham bi doi')
     if original.jump_targets() != rebuilt.jump_targets():
         bad.append('do thi nhay bi doi')
+    if original.trailer_names() != rebuilt.trailer_names():
+        bad.append('bang ID_TEXT tro sai')
     return bad
 
 

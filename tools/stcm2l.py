@@ -43,6 +43,15 @@ DATA BLOCK
     which lets the walker skip the zero padding that sits between them. Do not
     additionally require `flag == 0`: a small number of real blocks carry 1.
 
+DEBUG RECORD (fan disc only)
+    u32 ?, u32 ?, u32 source line, u32 size (always 16)
+    The fan disc's scripts put this right after the parameters of almost every
+    instruction; the main game's never do. The line field climbs by one from
+    instruction to instruction (165, 166, 167, ...) and never exceeds a quarter
+    of the file size, so it is a position in the source script, not an address,
+    and build() copies it verbatim. Before the walker knew about it, check()
+    counted all 635,000 of them as stray bytes and refused every fan disc file.
+
 PARAMETER
     u32 value       an immediate, or the address of one of the instruction's
                     own data blocks
@@ -73,6 +82,8 @@ END_LABEL = b'EXPORT_DATA'
 PARAM_SIZE = 12
 INS_HEADER = 16
 BLOCK_HEADER = 16
+DEBUG_SIZE = 16
+ID_TEXT_LABEL = b'ID_TEXT\x00'
 
 
 class Block:
@@ -99,7 +110,7 @@ class Block:
 
 class Instruction:
     __slots__ = ('off', 'global_call', 'opcode', 'params', 'length', 'blocks',
-                 'segments', 'tail')
+                 'segments', 'tail', 'debug')
 
     def __init__(self, off, global_call, opcode, params, length, blocks,
                  segments=None, tail=b''):
@@ -114,6 +125,7 @@ class Instruction:
         # between blocks would be lost and the file would not round-trip.
         self.segments = segments or []
         self.tail = tail                # <16 bytes left over at the end
+        self.debug = None               # offset of the fan disc debug record
 
     def __repr__(self):
         return '<Ins @%#x op=%#x params=%d blocks=%d len=%#x>' % (
@@ -151,6 +163,15 @@ class Script:
                       for i in range(npar)]
             blocks, segments = [], []
             q, lim = p + INS_HEADER + npar * PARAM_SIZE, p + ln
+            debug = None
+            if q + DEBUG_SIZE <= lim:
+                _a, w1, w2, size = struct.unpack_from('<4I', d, q)
+                # A 16-byte block would read (flag, 4, 1, 16); anything else
+                # ending in 16 here is the debug record.
+                if size == DEBUG_SIZE and not (w1 == 4 and w2 == 1):
+                    debug = q
+                    segments.append(('pad', d[q:q + DEBUG_SIZE]))
+                    q += DEBUG_SIZE
             while q + BLOCK_HEADER <= lim:
                 flag, nwords, one, blen = struct.unpack_from('<4I', d, q)
                 if one == 1 and blen == nwords * 4 and blen > 0 \
@@ -168,8 +189,9 @@ class Script:
                     q += 4
             tail = d[q:lim]
             self.tail += len(tail)
-            self.instructions.append(
-                Instruction(p, gcall, opcode, params, ln, blocks, segments, tail))
+            ins = Instruction(p, gcall, opcode, params, ln, blocks, segments, tail)
+            ins.debug = debug
+            self.instructions.append(ins)
             p += ln
         self.landed = (p == end)
 
@@ -275,9 +297,10 @@ class Script:
                 struct.pack_into('<I', trailer, o, moved[v])
         out += trailer
 
-        # pass 3: header offsets that follow the trailer's new position
+        # pass 3: header offsets that follow the trailer's new position. 0x3C
+        # is zero in the main game and the ID_TEXT table in the fan disc.
         shift = new_code_end - self.code_end
-        for hoff in (0x20, 0x2C):
+        for hoff in (0x20, 0x2C, 0x3C):
             v = struct.unpack_from('<I', out, hoff)[0]
             if v >= self.code_end:
                 struct.pack_into('<I', out, hoff, v + shift)
@@ -293,6 +316,23 @@ class Script:
         if coll + 8 <= len(out) and \
                 struct.unpack_from('<I', d, self._coll_off + 4)[0] == len(d):
             struct.pack_into('<I', out, coll + 4, len(out))
+
+        # pass 5: the fan disc's trailer does not end there. The same field
+        # points at an ID_TEXT section instead of at the end of the file - the
+        # main game simply has nothing after COLLECTION_LINK - and that section
+        # is a table of absolute pointers into the symbol names after it
+        # (`chapter_title`, `save_name`, the .stcm2 source path). All of it
+        # moves with the trailer. Scanned over all 150 files: these, 0x20, 0x2C
+        # and 0x3C are the only values in the header or trailer that point into
+        # the trailer, and every table entry lands just after a NUL.
+        nxt = struct.unpack_from('<I', d, self._coll_off + 4)[0]
+        if d[nxt:nxt + 8] == ID_TEXT_LABEL:
+            struct.pack_into('<I', out, coll + 4, nxt + shift)
+            count = struct.unpack_from('<I', d, nxt + 8)[0]
+            table = struct.unpack_from('<I', out, 0x3C)[0]
+            for o in range(table, table + 4 * count, 4):
+                v = struct.unpack_from('<I', out, o)[0]
+                struct.pack_into('<I', out, o, v + shift)
         return bytes(out)
 
     def call_targets(self):
@@ -318,6 +358,25 @@ class Script:
         return {(k, pi): idx[t1]
                 for k, ins in enumerate(self.instructions)
                 for pi, (_v, t1, _t2) in enumerate(ins.params) if t1 in idx}
+
+    def trailer_names(self):
+        """The ID_TEXT symbol names as the pointers resolve them, or None.
+
+        None for a main game script, which has no such section. Compare this
+        across a rebuild: a stale table still parses, it just reads each name
+        from the wrong place.
+        """
+        d = self.raw
+        nxt = struct.unpack_from('<I', d, self._coll_off + 4)[0]
+        if d[nxt:nxt + 8] != ID_TEXT_LABEL:
+            return None
+        count = struct.unpack_from('<I', d, nxt + 8)[0]
+        table = struct.unpack_from('<I', d, 0x3C)[0]
+        names = []
+        for o in range(table, table + 4 * count, 4):
+            v = struct.unpack_from('<I', d, o)[0]
+            names.append(d[v:d.find(b'\x00', v)] if v < len(d) else None)
+        return names
 
     def check_calls(self):
         """Count gc==1 instructions whose call target is not an instruction start.
@@ -355,6 +414,8 @@ class Script:
         d = self.raw
         for ins in self.instructions:
             covered = set()
+            if ins.debug is not None:
+                covered.update(range(ins.debug, ins.debug + DEBUG_SIZE))
             for b in ins.blocks:
                 covered.update(range(b.hdr_off,
                                      b.data_off + ((b.length + 3) & ~3)))
