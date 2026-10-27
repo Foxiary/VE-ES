@@ -380,6 +380,20 @@ def box_verdicts(boxes, info):
     return out
 
 
+QUOTES_RX = re.compile(r"['\"‘’“”]")
+
+
+def same_source(game, sheet):
+    """Whether a sheet's source cell is the block's text, quote marks folded.
+
+    The fan disc sheet came back with every `”` the game writes turned into a
+    straight `"` in its English column - 33,079 rows refused as belonging to
+    another dump. Only the confirmation folds them: the write is addressed by
+    the block offset, and what reaches the game is the translator's own text.
+    """
+    return QUOTES_RX.sub("'", game) == QUOTES_RX.sub("'", sheet)
+
+
 def cell_str(v):
     """A cell as the text it was meant to be.
 
@@ -481,7 +495,7 @@ def plan(ws, script, max_bytes=0, longrows=None, fit_only=False,
             st['offset khong phai block'] += 1
             continue
         cur = blk.text()
-        if cur is None or cur.strip() != src:
+        if cur is None or not same_source(cur.strip(), src):
             st['van ban khong khop'] += 1        # workbook built from another dump
             continue
         queue.append((rid, kind, src, tgt, off, blk, cur, jp))

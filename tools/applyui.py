@@ -119,8 +119,33 @@ def same_source(game, sheet):
     for this confirmation: the write itself is addressed by the id, and what
     goes into the game is the translator's own text.
     """
-    return (QUOTES_RX.sub("'", canon(game))
-            == QUOTES_RX.sub("'", canon(sheet)))
+    return (QUOTES_RX.sub("'", canon(edges(game)[1]))
+            == QUOTES_RX.sub("'", canon(edges(sheet)[1])))
+
+
+EDGE_RX = re.compile(r'^((?:#n|[ \t　])*)(.*?)((?:#n|[ \t　])*)$', re.S)
+
+
+def edges(s):
+    """(leading padding, body, trailing padding) - breaks and spaces at the ends.
+
+    Excel drops both from the ends of a cell. The fan disc sheet lost the `#n`
+    that opens every dbLibPersonal heading and strSystem's `#nNo data found`,
+    and the trailing space of three glossary entries; 21 rows refused.
+    """
+    return EDGE_RX.match(s or '').groups()
+
+
+def keep_edges(game, tgt):
+    """`tgt` with the game string's own end padding where it has none of its own.
+
+    The `#n` in front of a heading is layout - it pushes the line down - so a
+    translation that lost it to the spreadsheet would draw one line too high.
+    A translator who typed padding of their own is left alone.
+    """
+    head, _body, tail = edges(game)
+    t_head, body, t_tail = edges(tgt)
+    return (t_head or head) + body + (t_tail or tail)
 
 
 def plan(ws, g):
@@ -186,6 +211,7 @@ def plan(ws, g):
         # cannot be. This shipped once with every multi-line glossary entry
         # silently left in English while the single-line names translated fine.
         key = g.text(rel)
+        tgt = keep_edges(key, tgt)
         if tgt == key:
             st['giong ban goc'] += 1
             continue
