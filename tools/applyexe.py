@@ -90,14 +90,16 @@ FLAG_COMPRESSED = 0b111            # bits 0-2, one per segment
 HASH_OFF = (0xA0, 0xC0, 0xE0)
 
 
-def pointer_slots(ro, ro_mem):
-    """{string offset: [table offsets]} for every u64 in .rodata aiming at it.
+def pointer_slots(seg, ro_mem, ro=None):
+    """{string offset: [offsets in `seg`]} for every u64 in `seg` aiming at it.
 
     The quotes are reached through a pointer table, not through an address
     assembled in code, so retargeting one is a matter of rewriting eight bytes.
     Every 8-aligned word in the segment is read and kept if it lands on a string
-    start, which finds the table without having to know where it begins.
+    start in .rodata (`ro`, `seg` itself when not given), which finds the table
+    without having to know where it begins.
     """
+    ro = seg if ro is None else ro
     starts = {}
     o = 0
     while True:
@@ -108,11 +110,139 @@ def pointer_slots(ro, ro_mem):
             starts[o] = True
         o = e + 1
     out = collections.defaultdict(list)
-    for p in range(0, len(ro) - 8, 8):
-        v = struct.unpack_from('<Q', ro, p)[0] - ro_mem
+    for p in range(0, len(seg) - 8, 8):
+        v = struct.unpack_from('<Q', seg, p)[0] - ro_mem
         if 0 <= v < len(ro) and v in starts:
             out[v].append(p)
     return out
+
+
+def image(original, segs):
+    """(memory image, {segment: base address}) - the three segments laid out."""
+    mem = {name: struct.unpack_from('<I', original, hdr + 4)[0]
+           for name, hdr in SEGMENTS}
+    img = bytearray(mem['data'] + len(segs['data']))
+    for name in mem:
+        img[mem[name]:mem[name] + len(segs[name])] = segs[name]
+    return img, mem
+
+
+def relr_slots(img):
+    """Every address the loader relocates through DT_RELR.
+
+    RELR keeps the addend in the slot itself, so a pointer in one of these can
+    be retargeted by rewriting the eight bytes - the loader adds the module base
+    to whatever it finds there. A word outside this set is not relocated, and
+    rewriting it would aim at an absolute address that does not exist.
+    """
+    mod0 = struct.unpack_from('<I', img, 4)[0]
+    if img[mod0:mod0 + 4] != b'MOD0':
+        return set()
+    p = mod0 + struct.unpack_from('<i', img, mod0 + 4)[0]
+    tags = {}
+    while True:
+        t, v = struct.unpack_from('<qQ', img, p)
+        p += 16
+        if t == 0:
+            break
+        tags.setdefault(t, v)
+    if 36 not in tags:                       # DT_RELR
+        return set()
+    out, where = set(), 0
+    for q in range(tags[36], tags[36] + tags.get(35, 0), 8):
+        e = struct.unpack_from('<Q', img, q)[0]
+        if e & 1 == 0:
+            out.add(e)
+            where = e + 8
+        else:
+            for i in range(63):
+                if e >> (i + 1) & 1:
+                    out.add(where + 8 * i)
+            where += 63 * 8
+    return out
+
+
+def code_refs(text, base=0):
+    """Addresses .text builds with ADRP followed by ADD on the same register.
+
+    That is how AArch64 code names a string, so a string whose span one of
+    these lands in is still read by code and cannot be overwritten. Matched
+    loosely - the ADD may come up to eight instructions later - because a
+    reference missed here is a string clobbered under code that still uses it.
+    """
+    out = set()
+    words = struct.unpack_from('<%dI' % (len(text) // 4), text)
+    for i, w in enumerate(words):
+        if w & 0x9F000000 != 0x90000000:
+            continue
+        rd = w & 0x1F
+        imm = ((w >> 29) & 3) | (((w >> 5) & 0x7FFFF) << 2)
+        if imm & (1 << 20):
+            imm -= 1 << 21
+        page = ((base + 4 * i) & ~0xFFF) + (imm << 12)
+        for x in words[i + 1:i + 9]:
+            if x & 0xFFC00000 == 0x91000000 and (x >> 5) & 0x1F == rd:
+                out.add(page + ((x >> 10) & 0xFFF))
+                break
+    return out
+
+
+CRI_MESSAGE_RX = re.compile(rb'^[EW]\d{8,}[A-Z]*:')
+
+
+def free_spans(original, segs, moving, reuse_cri):
+    """[(rodata offset, size)] that relocated strings may be written into.
+
+    Three sources, each only where nothing else can still read the bytes:
+      - the page padding after .rodata, as before;
+      - the old span of every string being moved, once its pointer is
+        re-aimed - the fan disc keeps ~800 gallery and profile strings in
+        `main`, and a Vietnamese translation runs ~1.6x the English bytes, far
+        past the 3 KB of padding;
+      - with `reuse_cri`, the CRI middleware's error messages
+        (`E2010012613:Failed to ...`), which are only ever formatted into an
+        error log. Code still names their first byte, so an error raised after
+        this reads a Vietnamese line instead of the message. Off by default.
+    A span is refused if code or any relocated pointer lands inside it, other
+    than the very pointers being re-aimed.
+    """
+    img, mem = image(original, segs)
+    ro, ro_mem = segs['rodata'], mem['rodata']
+    relr = relr_slots(img)
+    retargeted = {mem[seg] + p for slots in moving.values() for seg, p in slots}
+    refs = collections.Counter(code_refs(segs['text'], mem['text']))
+    for s in relr:
+        if s not in retargeted:
+            refs[struct.unpack_from('<Q', img, s)[0]] += 1
+
+    def clear(lo, hi):
+        return not any(ro_mem + o in refs for o in range(lo, hi + 1))
+
+    spans = [(len(ro), mem['data'] - (ro_mem + len(ro)))]
+    for off in moving:
+        end = ro.find(b'\x00', off)
+        if clear(off, end):
+            spans.append((off, end + 1 - off))
+    if reuse_cri:
+        o = 0
+        while True:
+            end = ro.find(b'\x00', o)
+            if end < 0:
+                break
+            if CRI_MESSAGE_RX.match(ro[o:end]) and o not in moving \
+                    and clear(o + 1, end):
+                spans.append((o, end + 1 - o))
+            o = end + 1
+    # Neighbours merge. Each old span is only as long as its English, and the
+    # Vietnamese that has to move is by definition longer, so unmerged spans fit
+    # nothing - but the gallery strings sit packed together in runs.
+    merged = []
+    for o, n in sorted(spans):
+        if merged and merged[-1][0] + merged[-1][1] == o:
+            merged[-1] = (merged[-1][0], merged[-1][1] + n)
+        else:
+            merged.append((o, n))
+    return merged, relr
 
 
 def plan(ws, segs):
@@ -174,50 +304,105 @@ def plan(ws, segs):
     return out, st, notes
 
 
-def place(segs, accepted, pool, slots, ro_mem, st, notes):
+def string_slots(original, segs):
+    """{rodata offset: [(segment, offset)]} - every pointer that can be re-aimed.
+
+    Searched in .rodata (the main game's quote table) and .data (the fan disc's
+    gallery and profile tables). Where the module relocates through DT_RELR,
+    only slots RELR covers count - the loader adds the base to those and to
+    nothing else. The main game has no RELR, and keeps the old rule.
+    """
+    img, mem = image(original, segs)
+    relr = relr_slots(img)
+    ro_mem = mem['rodata']
+    out = collections.defaultdict(list)
+    for seg in ('rodata', 'data'):
+        for off, ps in pointer_slots(segs[seg], ro_mem,
+                                     segs['rodata']).items():
+            out[off] += [(seg, p) for p in ps
+                         if not relr or mem[seg] + p in relr]
+    return out
+
+
+def place(original, segs, accepted, reuse_cri, st, notes):
     """Write the accepted rows into the segments, moving what will not fit.
 
-    `pool` is how many bytes .rodata may grow by - the padding before .data.
-    Returns {segment: bytes} and the number of strings that had to move.
+    A row that fits its own span is written there. One that does not is moved
+    into a free span (see free_spans) and every pointer to it re-aimed; the
+    largest strings are placed first, each into the smallest span that holds
+    it. Returns ({segment: bytes}, strings moved, bytes .rodata grew by, pool).
     """
+    ro_mem = struct.unpack_from('<I', original, 0x24)[0]
+    slots = string_slots(original, segs)
     out = {k: bytearray(v) for k, v in segs.items()}
-    tail = bytearray()
-    moved = 0
 
+    moving, written = {}, {}
     for seg, rows in accepted.items():
         for off, (rid, raw, room) in sorted(rows.items()):
             if len(raw) <= room:
                 out[seg][off:off + room] = raw.ljust(room, b'\x00')
+                written[(seg, off)] = raw
                 st['applied'] += 1
                 continue
             if seg != 'rodata':
                 st['dai qua cho'] += 1
                 notes.append('%s: %d byte, cho co %d' % (rid, len(raw), room))
                 continue
-            where = slots.get(off)
-            if not where:
+            if not slots.get(off):
                 st['khong tim thay con tro'] += 1
                 notes.append('%s: dai %d/%d va khong co con tro de doi'
                              % (rid, len(raw), room))
                 continue
-            need = len(raw) + 1                       # the string plus its NUL
-            if len(tail) + need > pool:
-                st['het cho de doi'] += 1
-                notes.append('%s: can them %d byte, pool con %d'
-                             % (rid, need, pool - len(tail)))
-                continue
-            new_off = len(segs['rodata']) + len(tail)
-            tail += raw + b'\x00'
-            for p in where:
-                struct.pack_into('<Q', out['rodata'], p, ro_mem + new_off)
-            # The old copy is left as it is: nothing points at it any more, and
-            # blanking it would only make the diff harder to read.
-            st['applied'] += 1
-            st['da doi cho'] += 1
-            moved += 1
+            moving[off] = (rid, raw)
 
-    out['rodata'] += tail
-    return {k: bytes(v) for k, v in out.items()}, moved, len(tail)
+    spans, _relr = free_spans(original, segs,
+                              {o: slots[o] for o in moving}, reuse_cri)
+    pool = sum(n for _o, n in spans)
+    tail_end = len(segs['rodata'])
+    free = sorted(spans, key=lambda s: s[1])
+    placed = {}
+    for off, (rid, raw) in sorted(moving.items(), key=lambda kv: -len(kv[1][1])):
+        need = len(raw) + 1                           # the string plus its NUL
+        k = next((i for i, (_o, n) in enumerate(free) if n >= need), None)
+        if k is None:
+            st['het cho de doi'] += 1
+            notes.append('%s: can %d byte, khong con khoang trong nao du lon'
+                         % (rid, need))
+            continue
+        at, n = free.pop(k)
+        placed[off] = (at, raw)
+        if n > need:
+            free.append((at + need, n - need))
+            free.sort(key=lambda s: s[1])
+    if len(placed) < len(moving):
+        # All or nothing: a string left behind still has its pointer on its old
+        # span, and that span may already have been handed to another string.
+        st['het cho de doi'] += len(placed)
+        notes.append('khong du cho cho %d chuoi - khong doi cho chuoi nao '
+                     '(thu --reuse-cri)' % (len(moving) - len(placed)))
+        placed = {}
+
+    # Old spans are blanked before anything is written into them, so a span
+    # reused by another string never keeps a stale tail of the first. One that
+    # is still read from elsewhere was not offered as free, and keeps its text.
+    freed = {o for o, _n in spans}
+    for off in placed:
+        if off not in freed:
+            continue
+        end = segs['rodata'].find(b'\x00', off)
+        out['rodata'][off:end] = b'\x00' * (end - off)
+    grew = max([at + len(raw) + 1 for at, raw in placed.values()
+                if at >= tail_end] + [tail_end]) - tail_end
+    out['rodata'] += b'\x00' * grew
+    for off, (at, raw) in placed.items():
+        out['rodata'][at:at + len(raw) + 1] = raw + b'\x00'
+        for seg, p in slots[off]:
+            struct.pack_into('<Q', out[seg], p, ro_mem + at)
+        written[('rodata', off)] = raw
+        st['applied'] += 1
+        st['da doi cho'] += 1
+    return ({k: bytes(v) for k, v in out.items()}, len(placed), grew, pool,
+            written)
 
 
 def build(original, segs):
@@ -249,11 +434,19 @@ def verify(original, produced, expected):
     before = dict(nso_segments(original))
     after = dict(nso_segments(produced))
 
-    for name in ('text', 'data'):
-        if after[name] != before[name]:
-            return '%s doi khac du khong va gi' % name
-    if after['rodata'] != expected['rodata']:
-        return 'rodata khong khop ban va'
+    if after['text'] != before['text']:
+        return 'text doi khac du khong va gi'
+    for name in ('rodata', 'data'):
+        if after[name] != expected[name]:
+            return '%s khong khop ban va' % name
+    # .data may differ only in whole pointer slots, each aiming into .rodata.
+    ro_mem = struct.unpack_from('<I', produced, 0x24)[0]
+    a, b = before['data'], after['data']
+    for p in range(0, len(a), 8):
+        if a[p:p + 8] != b[p:p + 8]:
+            v = struct.unpack_from('<Q', b, p)[0] - ro_mem
+            if not 0 <= v < len(after['rodata']):
+                return 'data %#x khong tro vao rodata' % p
 
     flags = struct.unpack_from('<I', produced, 0x0C)[0]
     if flags & FLAG_COMPRESSED:
@@ -263,6 +456,28 @@ def verify(original, produced, expected):
         if stored != hashlib.sha256(after[name]).digest():
             return 'hash %s khong khop' % name
     return None
+
+
+def readback(original, produced, written):
+    """[(offset, text read)] for every written string the result does not show.
+
+    Each one is followed the way the game reaches it: through its pointers when
+    it has any, at its own offset when it has none. A string moved into a span
+    another string also landed in would read back wrong here.
+    """
+    before = dict(nso_segments(original))
+    after = dict(nso_segments(produced))
+    ro_mem = struct.unpack_from('<I', produced, 0x24)[0]
+    slots = string_slots(original, before)
+    bad = []
+    for (seg, off), raw in written.items():
+        targets = [struct.unpack_from('<Q', after[s], p)[0] - ro_mem
+                   for s, p in slots.get(off, ())] if seg == 'rodata' else []
+        for t in targets or [off]:
+            got = after[seg][t:after[seg].find(b'\x00', t)]
+            if got != raw:
+                bad.append((off, got.decode('utf-8', 'replace')))
+    return bad
 
 
 def install(path, title_id, mod_name):
@@ -288,6 +503,9 @@ def main():
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--install', action='store_true',
                     help='also copy into the Ryujinx exefs mod folder')
+    ap.add_argument('--reuse-cri', action='store_true',
+                    help='also write moved strings over the CRI middleware '
+                         'error messages; only an error log reads them')
     ap.add_argument('--title-id', default='01009cf01bac4000')
     ap.add_argument('--mod-name', default='vn-translation')
     a = ap.parse_args()
@@ -320,8 +538,8 @@ def main():
             accepted[seg].update(rows)
         print('%-20s %4d dong, nhan %d' % (name, st['rows'], st['nhan']))
 
-    slots = pointer_slots(segs['rodata'], ro_mem)
-    patched, moved, grew = place(segs, accepted, pool, slots, ro_mem, tot, notes)
+    patched, moved, grew, free, written = place(original, segs, accepted,
+                                                a.reuse_cri, tot, notes)
 
     for n in notes[:8]:
         print('    !! %s' % n)
@@ -344,9 +562,12 @@ def main():
     print('-' * 60)
     print('ap dung %d chuoi (%d viet tai cho, %d phai doi cho)'
           % (tot['applied'], tot['applied'] - moved, moved))
-    if grew:
-        print('rodata dai them %s byte, con lai %s byte trong pool'
-              % (format(grew, ','), format(pool - grew, ',')))
+    if moved:
+        print('khoang trong de doi cho: %s byte | rodata dai them %s / %s byte'
+              % (format(free, ','), format(grew, ','), format(pool, ',')))
+    for off, text in readback(original, produced, written):
+        print('    !! doc lai sai: %#x %r' % (off, text[:40]))
+        return 1
     print('file: %s -> %s byte (bo nen)'
           % (format(len(original), ','), format(len(produced), ',')))
     for k in ('chua dich', 'giong ban goc', 'dai qua cho', 'het cho de doi',

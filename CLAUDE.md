@@ -393,6 +393,19 @@ into the 4,056 bytes of page padding between `.rodata` and `.data` and its
 pointer re-aimed; all twelve at +25% need about 2,857 of those bytes. In-place
 is still preferred when the translation fits.
 
+**The fan disc keeps far more in `main`: ~830 strings, ~70 KB** - scene
+titles, gallery voice subtitles and the character profile answers. Each is
+reached through exactly one u64 in `.data`, every one covered by **DT_RELR**,
+which keeps the addend in the slot, so rewriting the slot re-aims it (the main
+game has no RELR). Vietnamese runs ~1.6x the bytes (the titles nearly 1.9x),
+so the 3,336 bytes of padding are nowhere near enough: `applyexe` reuses the
+old spans of moved strings, merged with their neighbours, and refuses any span
+that code (ADRP+ADD) or another relocated pointer still lands in. That still
+left ~46 KB short; `--reuse-cri` adds the 858 CRI middleware error messages,
+which only an error log reads - code still names their first byte, so a CRI
+error after this prints Vietnamese. All or nothing: if any string cannot be
+placed, none moves, because a span may already be promised to another.
+
 **The NSO is rebuilt uncompressed**, clearing bits 0-2 of the flags at 0x0C
 rather than carrying an LZ4 compressor - 1.8 MB becomes 2.9 MB. Bits 3-5 say all
 three segments are SHA256-checked, with the digests at 0xA0/0xC0/0xE0 taken over
