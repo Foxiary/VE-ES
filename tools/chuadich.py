@@ -35,6 +35,7 @@ import openpyxl
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relinkjp
 from applyvi import ID_RX, cell_str, read_scripts
+from jpfiles import find_jp
 from linebreak import to_game, to_sheet
 from stcm2l import Script
 from mksheet import detect_delta, STORY_ROLES
@@ -44,7 +45,11 @@ from openpyxl.styles import Alignment, Font, PatternFill
 SRC, MERGED, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 merged = openpyxl.load_workbook(MERGED, read_only=True, data_only=True)
 src = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
-en_raw = dict(read_scripts('STORY.cpk')); jp_raw = dict(read_scripts('work/jp/CONTENTS/STORY.cpk'))
+# The Japanese build may sit anywhere in the project folder.
+JP_STORY = find_jp('STORY.cpk')
+if not JP_STORY:
+    sys.exit('!! khong thay STORY.cpk ban tieng Nhat trong thu muc du an (xem jpfiles.py)')
+en_raw = dict(read_scripts('STORY.cpk')); jp_raw = dict(read_scripts(JP_STORY))
 blank = lambda t: not (t or '').replace('#n', '').strip(' \t\u3000\n')
 
 vi_of = {}

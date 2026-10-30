@@ -145,7 +145,8 @@ from stcm2l import Script                          # noqa: E402
 from gbnl import GBNL                              # noqa: E402
 from cpk import CPK                                # noqa: E402
 from portjp2us import align                        # noqa: E402
-from textwidth import Widths, CEILING, shown       # noqa: E402
+from textwidth import Widths, CEILING, shown, UNMEASURED  # noqa: E402
+from jpfiles import find_jp, DEFAULT_DIR as JP_DIR       # noqa: E402
 from linebreak import to_sheet, to_game            # noqa: E402
 
 # Opcode -> role, as laid out in the English build. Rebased per file; see above.
@@ -921,9 +922,9 @@ def main():
                     help='STORY.cpk or a directory of .DAT scripts')
     ap.add_argument('--system', default='SYSTEM.cpk',
                     help='SYSTEM.cpk or a directory of .gbin/.gstr files')
-    ap.add_argument('--jp-story', default='work/jp/CONTENTS/STORY.cpk',
-                    help='the Japanese build, for the reference column')
-    ap.add_argument('--jp-system', default='work/jp/CONTENTS/SYSTEM.cpk')
+    ap.add_argument('--jp-story',
+                    help='the Japanese build, for the reference column; found in the project folder when not given (jpfiles.py)')
+    ap.add_argument('--jp-system', help='the Japanese SYSTEM.cpk; found in the project folder when not given (jpfiles.py)')
     ap.add_argument('--out', required=True, help='spreadsheet to write')
     ap.add_argument('--no-story', action='store_true')
     ap.add_argument('--no-system', action='store_true')
@@ -934,8 +935,8 @@ def main():
                          'the game draws with; the stock archive measures a '
                          'different font and gives wrong widths')
     ap.add_argument('--ceiling', type=int, default=CEILING,
-                    help='box width in advance units (default %d, the backlog, '
-                         'narrowest of the three screens)' % CEILING)
+                    help='box width in advance units (default: the backlog '
+                         'measured in windows.json)')
     ap.add_argument('--merge',
                     help='a translation sheet carrying this tool\'s EN ID column; '
                          'its Vietnamese is filled in and flagged for review')
@@ -949,6 +950,9 @@ def main():
                          '(repeatable). It used to filter the scripts only, so '
                          'asking for one database still wrote all nine.')
     a = ap.parse_args()
+    # Not found falls back to the old place, so the messages below name a path.
+    a.jp_story = a.jp_story or find_jp('STORY.cpk') or os.path.join(JP_DIR, 'STORY.cpk')
+    a.jp_system = a.jp_system or find_jp('SYSTEM.cpk') or os.path.join(JP_DIR, 'SYSTEM.cpk')
 
     jp_story = {} if a.no_jp else read_map(a.jp_story, ('.DAT',))
     jp_system = {} if a.no_jp else read_map(a.jp_system, ('.gbin', '.gstr'))
@@ -980,6 +984,9 @@ def main():
     widths, ceiling = None, a.ceiling
     if merge:
         widths = load_fonts(a.font)
+        if widths is not None and ceiling is None:
+            print(UNMEASURED)
+            widths = None
         if widths is not None:
             print('do be rong bang %s | tran %d don vi (khung backlog)'
                   % (a.font, ceiling))

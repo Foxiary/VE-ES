@@ -43,11 +43,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import relinkjp                                            # noqa: E402
 from applyvi import cell_str, read_scripts                 # noqa: E402
+from jpfiles import find_jp                                # noqa: E402
 from linebreak import to_game, to_sheet                    # noqa: E402
 from mksheet import detect_delta                           # noqa: E402
 from reflow import Breaker, boxes_with_window, resolve_font, STOCK_FONT  # noqa: E402
 from stcm2l import Script                                  # noqa: E402
-from textwidth import Widths, CEILING, ceiling_for         # noqa: E402
+from textwidth import Widths, CEILING, ceiling_for, ceilings_source  # noqa: E402
 
 HEAD = ['sheet', 'dong Excel', 'ID', 'o dem dung duoc', 'so o dem con trong',
         'be rong', 'tran cua khung', 'vuot', 'JP trong file game',
@@ -93,7 +94,11 @@ def src_rows(src_path, en_raw):
     if not src_path:
         return {}
     wb = openpyxl.load_workbook(src_path, read_only=True, data_only=True)
-    jp_raw = dict(read_scripts('work/jp/CONTENTS/STORY.cpk'))
+    # The Japanese build may sit anywhere in the project folder.
+    jp_story = find_jp('STORY.cpk')
+    if not jp_story:
+        sys.exit('!! khong thay STORY.cpk ban tieng Nhat trong thu muc du an (xem jpfiles.py)')
+    jp_raw = dict(read_scripts(jp_story))
     out = {}
     for name in wb.sheetnames:
         if not name.isdigit() or name + '.DAT' not in en_raw:
@@ -143,6 +148,7 @@ def main():
     if is_stock:
         print('!! dang do bang %s - font tieng Anh goc, moi so deu sai' % STOCK_FONT)
     print('font do: %s' % font)
+    print(ceilings_source())
     widths = Widths.from_cpk(font)
     breakers = {}
 
@@ -172,8 +178,10 @@ def main():
         for slots, window in boxes_with_window(script, delta, name,
                                                keep_blank=True):
             limit = ceiling_for(window, CEILING)
-            if limit >= CEILING:
-                continue                     # judged against the backlog already
+            # Unmeasured windows are skipped, and so is anything the backlog
+            # already holds - this tool lists only the narrower windows.
+            if limit is None or (CEILING is not None and limit >= CEILING):
+                continue
             st['khung'] += 1
             filled = [rid for rid in slots if vi[name].get(rid)]
             over = [rid for rid in filled
