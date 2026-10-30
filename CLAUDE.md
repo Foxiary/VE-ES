@@ -479,6 +479,126 @@ the stock file makes advfont3 come out wider than advfont1 (3068 vs 2998) for a
 string that is plainly narrower in advfont3 on screen — with the shipped fonts
 it is 3032 vs 3198. Every width number taken from the wrong file is wrong.
 
+## Letter spacing on UI screens (Collar×Malice)
+
+The Load/Save slot list shows `Lự a chọ n`, a gap after every accented letter,
+and **no font metric changes it**. The slot text is the choice text copied into
+`SaveInfos.bin` at save time, so old saves keep whatever encoding the script had
+then. It is drawn by one routine (JP `main` `.text` 0x173630; the same `fcsel` is at
+0x180920 in EN), which picks each character's step here:
+
+```
+1739e4  ldr   s0, [sp, #20]      ; style pitch: a fixed cell
+1739e8  cmn   w8, #3             ; -3 = glyph from the font's single-byte table
+1739ec  fcsel s0, s15, s0, eq    ; s15 = size / cell_height * advance
+```
+
+ASCII steps by its advance; **every multi-byte character steps the fixed cell**,
+whatever its glyph. Japanese is all full-width and English all ASCII, so neither
+build shows it - EN has the same three instructions. Measured off a screenshot,
+Vietnamese steps 66-67 units of `font_Normal` against advances of 24-42, and a
+fit with a constant step beats a proportional one (0.33 px rms against 1.4).
+That is why trimming the em box, repacking to EN style, widths in multiples of
+8 and retargeting to Latin Extended-B all left it as it was: the last one only
+moves the letters to other multi-byte code points.
+
+The fix is one instruction, `fcsel` → `fmov s0, s15`, shipped as an IPS keyed
+on the build ID (`work/cxm-save/savelist_ips.py`, offset +0x100 for the NSO
+header). Full-width characters then step `size * 72 / 75`, a few pixels wider
+than the style pitch on `『』`. Whether Virche Evermore's save list has the same
+routine is not checked.
+
+**With `#KerningOn` (the Options menu) the JP engine stretches ASCII by
+`72 / max_ascii_advance`.** There a glyph is drawn at `size / getSize()` and
+steps `size * adv / byte16` if single-byte, `size * adv / getSize()` if not.
+`getSize()` (JP 0x1762C0) is header byte 9 = 72; byte 16 is the largest
+advance among codes 0-255, computed at load - 58 in the patch, so every Latin
+letter stepped 1.24x its width (measured 1.23). Aksys changed `getSize()` to
+return byte 16 (EN 0x183200), which also draws every glyph 72/54 larger - why
+the EN Latin is rendered small. Keeping the JP executable, a blank 72-advance
+glyph at U+007F makes byte 16 equal 72 instead, with no change in glyph size.
+The patch also padded its Latin: 88 of 94 printable ASCII bitmaps are the EN
+ones moved right 2-10 px, the rest carry 1-4 stray pixels from its tool, which
+widened `n` by 10 units. `work/cxm-save/en_spacing.py` does both.
+
+**That padding was there for the negative letter spacing**, which every UI
+subtracts from each step and EN keeps unchanged. There are two text drawers:
+
+- Drawer 1 (0x17CA90, tags, kerning): pixels, setter 0x17E230. -7
+  `AdvCstmUiSimple`, -5 `advUiSelectText`, -2 the kerning menus.
+- Drawer 2 (0x1281A0, step = scale * (advance + spacing)): font units at
+  `style+16` of a 56-byte style created through 0x39970. -6 `ADV_TALK_MSG` and
+  `advUiSelectText`, -8 `UI_CONF_MSG_TEXT` / `UI_CONF_ITEM_TEXT` / memory, -5
+  `UI_SIMPLE_TEXT`, -12 / -14 the dictionary.
+
+The Options reset dialog is `UI_CONF_MSG_TEXT`: patching the drawer-1 -7
+changed nothing on screen, while a fit at its glyph scale gives -8 units. With
+EN-spaced Latin these values run letters together, and the padding that
+absorbed them made the -2 menus look loose, so no one font serves both.
+Patching those constants missed the message window, which still stepped
+`advance - 10` units - its value is set somewhere not found - so
+`savelist_ips.py` changes the spacing where each drawer adds it instead. Drawer
+1 uses a constant -2 px (0x17C2D0 / 0x17C32C). Drawer 2 keeps each UI's value
+divided by 4 (0x1286E8, `add w8, w8, w9, asr #2`): a flat -2 ran the
+dictionary's descriptions past their frame, and a quarter keeps the dictionary
+at about the 2021 width (-12 → -3) while -8 / -6 / -5 land on -2. Three
+dictionary lines still overflow at -3; they did in 2021 too and need a `#n`,
+not a spacing change. Drawer 1 without
+`#KerningOn` steps a fixed cell instead (size for multi-byte, `size * byte16 /
+byte9` for ASCII); the U+007F glyph made that the full size and the chapter
+list printed `C h a p t e`, so the patch also sends every character down the
+proportional path (0x17BF44, 0x17C20C). The dictionary word lists put text
+against their red row marker, which kana clear with their own side bearing; EN
+adds 4.0 to the list x (EN 0x63968, 0x67638), and the patch does the same in
+place: loading the entry offsets straight from `x27` frees two address adds for
+`fmov s16, #4.0` / `fadd`. **A cave in the .text page padding crashed the game**
+the moment the screen opened - code past the text size in the NSO header is not
+executable under the emulator, page-aligned or not, so an IPS cannot add code;
+only a rebuilt `main` with a larger text segment can. A column-profile fit cannot
+tell glyph scale from spacing on its own, so pin the scale from a glyph's
+height first.
+
+**What ships instead: every horizontal line at the Dictionary's spacing.** The
+Dictionary (drawer 2, -12 units, 2021 font) was the one screen that read tight
+and even. Measured off a screenshot it draws each glyph at full size and steps
+`adv - 12`. Elsewhere:
+
+- **Drawer 1 used a fixed cell** - chapter list, Options, help bars, the centred
+  ADV banner. `savelist_ips.py` sends every drawer-1 character down the
+  proportional path and divides by `getSize()` for single- and multi-byte alike,
+  so there is no `adv / 58` stretch under `#KerningOn`. It subtracts 12 units
+  in the glyph and line-width passes and drops each UI's pixel spacing.
+- **Drawer 2 kept each style's own spacing.** The chapter screen's STORY panel
+  measured `adv - 3`, the message window is -6. It now uses a flat -12
+  (0x1286E8), the Dictionary list's -14 included; vertical text keeps its own.
+
+The 2021 font has no advance under 12, and 72-wide kana/kanji with ~59 of ink
+still clear each other at 60.
+
+**Drawer 1's record `+56` is both the pen step and the glyph's cell**, and
+its glyph drawer (0x17B670) centres a glyph narrower than the cell and squeezes
+one wider into it. The glyph's own width is scale × the atlas width byte, which
+is the GTAB advance (0x176FDC). Cutting `+56` alone therefore squeezed every
+letter to ~0.65 and left the gaps where they were: pitch was `0.86 * (adv - 12)`
+px, but the ink was a third short. The drawer now always uses the glyph's own
+width, so `+56` is only the step. The atlas region starts at bitmap column 0,
+so a letter still lands at `pen + lsb`. Confirmed in game on 2026-10-30.
+
+**Everything else from the first attempt was reverted.** In game the
+EN-spaced font with the -2 px / `asr #2` spacings looked uneven on every screen,
+the message window and the Dictionary most of all. That font gave ASCII its EN
+side bearings and the Vietnamese letters lsb 0, so no single spacing suited both.
+`font_Normal` / `font_Mail` are back to the 2021 bytes, which pad both alike.
+The U+007F glyph, those spacings and the dictionary +4 went with the font; they
+are kept in `savelist_ips.py` as `SPACING_PATCHES`, unused. The re-broken
+dictionary lines stay - the 2021 font at -12 lands on the same width as
+EN-spaced glyphs at -3. Two
+dictionary titles that the 2021 patch abbreviated were later written out in full
+(`dbDictionary_01` records 12 and 37), at 804 and 1009 units against 753 for
+the widest other title. They do not fit the list column, so `main` now clips each row at
+the end of its red bar and scrolls the selected one (`work/cxm-voice/marquee.s`,
+linked by `voicesub.py`). Rebuild `main` only through that script.
+
 ## Traps that produce silently wrong results
 
 **Structural checks cannot see a stale pointer.** `Script.check()` and
