@@ -571,6 +571,11 @@ and even. Measured off a screenshot it draws each glyph at full size and steps
 - **Drawer 2 kept each style's own spacing.** The chapter screen's STORY panel
   measured `adv - 3`, the message window is -6. It now uses a flat -12
   (0x1286E8), the Dictionary list's -14 included; vertical text keeps its own.
+- **The save list (0x173630) stepped `adv` once its `fcsel` was gone**, with
+  zero spacing. Both discs use this one routine; -Unlimited- has no copy of its
+  own. Its step is now `s15 - 12 * s15 / adv` (0x1739E0-0x1739F0), where `s15` is
+  also the width the glyph is drawn at. The three glyph-missing exits move to
+  0x1739F4 to make room.
 
 The 2021 font has no advance under 12, and 72-wide kana/kanji with ~59 of ink
 still clear each other at 60.
@@ -598,6 +603,65 @@ dictionary titles that the 2021 patch abbreviated were later written out in full
 the widest other title. They do not fit the list column, so `main` now clips each row at
 the end of its red bar and scrolls the selected one (`work/cxm-voice/marquee.s`,
 linked by `voicesub.py`). Rebuild `main` only through that script.
+
+**-Unlimited-'s voice-recorder subtitles are text, not textures.** The main
+game's English subtitles are 25 pre-drawn `SUBTITLE/%02u.tid`. The English
+-Unlimited- (`0100E3B00F412000`) instead keeps 83 rows of (voice id, question,
+answer) as C strings in its `main`, at `.data` 0x3442D8. That is one row per
+row of `dbLibVoiceRecorder_02`, whose voice ids match the JP build in order.
+Aksys rewrote the recorder around them, and none of that exists in JP.
+`work/cxm-voice/unlsub.py` renders each row as one DXT5 texture:
+
+- the English panel art from its BC7 `voiceRecorderParts.tid`;
+- the English `sysfont.ffu` at ×1.57, the scale measured off a screenshot;
+- 2 texels per unit of the engine's 960×540 space, which is what the
+  sub-rect draw 0xE0940 expects.
+
+It adds them to GAME_02 as `VOICERECORDER/SUBTITLE/00..82.tid`. There are 2,896
+bytes of TOC slack, so every file name reuses a string already in the pool.
+`unlsub.s` hooks play (0xC6888), the list's cursor input (0xC652C, which
+scrolls the answer while it is up), draw (0xC7A3C) and teardown (0xC7FEC).
+Confirmed in game on 2026-10-31.
+
+The character's line on the -Unlimited- Extra screen is the same story: 225
+(voice id, line) pairs at EN `.data` 0x3434C8, and a message box Aksys added to
+`extra_charParts.tid`. The box is drawn at (350, 400) only while a line plays.
+`unlsub.py` renders box and line as `SUBTITLE/<voice id>.tid`. `unlsub.s` hooks:
+
+- the three greetings (0xC162C, 0xC1758, 0xC19F8);
+- the draw handler's last part (0xC3298);
+- the close (0xC22A4).
+
+225 more TOC rows did not fit the 2,896 bytes of slack, so `unlsub.py cpk`
+moves the GTOC and the content down and adds the same delta to every
+`FileOffset`, which is relative to `TocOffset`. Confirmed in game on
+2026-10-31.
+
+**Growing .text means moving everything after it.** The cave in the page
+padding before `.rodata` filled up at 1.5 KB. JP `.text` has no dead code to
+reuse: every function its FDEs list is referenced. So `voicesub.py` now moves
+`.rodata`/`.data`/`.bss` up a page via `work/cxm-voice/nsoshift.py`, which
+rebases each kind of reference across the boundary:
+
+- ADRP;
+- 440 `ldrsw; add; br` jump tables (entry -= D) - the ones an earlier try
+  missed. Find them from the `ldrsw`, not the `br`: 0x10D968's `br` sits
+  past a run of argument moves. Matching from the `br` found 439, and that
+  one switch crashed the game on entering the main story;
+- RELA offsets and addends;
+- address-valued dynamic tags;
+- dynsym;
+- MOD0;
+- `.eh_frame_hdr` and FDE `pc_begin`.
+
+`verify()` decodes all of them in stock and in the build and compares them.
+A switch's size comes from its `cmp` guard, which is not always next to it:
+
+- 0x157C08 enters by `b.ls`;
+- 0x429A4 by `cbz` with flags set earlier;
+- 0x4488C compares a different copy of the index.
+
+Cave data still goes after `.rodata`, in its page padding.
 
 ## Traps that produce silently wrong results
 
